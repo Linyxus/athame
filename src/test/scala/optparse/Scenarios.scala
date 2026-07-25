@@ -189,3 +189,25 @@ object Scenarios:
   val unionResult =
     sub("count", "Yield a number", opt[Int]("value", 'n', "The number")) |
       sub("label", "Yield a string", arg[String]("text", "The text"))
+
+  // -------------------------------------------------------------------------------------------
+  // Per-subcommand help opt-out (A9): one silent subcommand beside an ordinary one
+  // -------------------------------------------------------------------------------------------
+
+  val helpOptOut =
+    sub("version", "Print the version number", pure("0.1.0"), help = false) |
+      sub(
+        "build",
+        "Compile a target",
+        arg[String]("target", "Build target") ~ flag("fast", 'f', "Skip the slow checks")
+      )
+
+  /** Help-ness is per scope and not inherited (A9.2): the silent `outer` scope contains a chatty
+    * `inner` and another silent `mute`, so both directions of nesting are covered.
+    */
+  val nestedHelpGroup =
+    sub("inner", "A scope that answers --help", opt[Int]("depth", 'd', "How deep to go")) |
+      sub("mute", "A scope that does not", flag("loud", "Be noisy"), help = false)
+
+  val nestedHelpOptOut =
+    sub("outer", "A scope that does not answer --help", nestedHelpGroup, help = false)

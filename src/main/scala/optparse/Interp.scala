@@ -90,6 +90,7 @@ object Interp:
     name: String,
     desc: String,
     inner: Cli[?, ?],
+    help: Boolean,
     wrap: ErasedMap
   )
 
@@ -109,7 +110,7 @@ object Interp:
 
     def prepareEntries(): Unit =
       preparedEntries = rawEntries.map { entry =>
-        SubEntry(entry.name, entry.desc, prepareScope(entry.inner), entry.wrap)
+        SubEntry(entry.name, entry.desc, prepareScope(entry.inner, entry.help), entry.wrap)
       }
 
     def select(result: Either[ParseError, Any]): Unit = parsed = Some(result)
@@ -123,6 +124,15 @@ object Interp:
     val subgroups = ListBuffer.empty[SubgroupSlot]
 
     def registerOption(slot: OptionSlot): Unit =
+      // R6/A8.4: the scanner answers `--help` in every scope, so a user option cannot claim the
+      // name. Short 'h' stays free, and Arg/Sub names are unaffected. A9.3: the reservation is
+      // universal — a scope that opted out of auto-help still may not define its own `--help`, so
+      // that re-enabling it later cannot break a working grammar.
+      if slot.longName == Help.reservedOptionName then
+        violation(
+          s"option name '${Help.reservedOptionName}' is reserved for the automatic help option"
+        )
+
       if options.exists(_.longName == slot.longName) then
         violation(s"duplicate long option name '--${slot.longName}' in scope")
 
@@ -167,7 +177,15 @@ object Interp:
           case Arity.Repeated => ()
       }
 
-  private final case class Program(scope: Scope, builder: Builder)
+  /** `cli` is kept only so that a `--help` token can render this scope's own grammar (A8.1);
+    * `helpEnabled` is that scope's `H` (A9.1), false for a subcommand declared with `help = false`.
+    */
+  private final case class Program(
+    cli: Cli[?, ?],
+    helpEnabled: Boolean,
+    scope: Scope,
+    builder: Builder
+  )
 
   private enum Leaf:
     case OptLeaf(name: String, short: Option[Char], read: ErasedRead)
@@ -179,15 +197,16 @@ object Interp:
     * visits every subcommand scope before token scanning starts.
     */
   def parse[R](cli: Cli[?, R], args: Seq[String]): Either[ParseError, R] =
-    val program = prepareScope(cli)
+    // A9.1: the root scope always auto-accepts `--help`; only subcommands may opt out.
+    val program = prepareScope(cli, helpEnabled = true)
     parseScope(program, args).map(_.asInstanceOf[R])
 
-  private def prepareScope(root: Cli[?, ?]): Program =
+  private def prepareScope(root: Cli[?, ?], helpEnabled: Boolean): Program =
     val scope = new Scope
     val builder = build(root, scope)
     scope.validateLocalStructure()
     scope.subgroups.foreach(_.prepareEntries())
-    Program(scope, builder)
+    Program(root, helpEnabled, scope, builder)
 
   /** The mandated single-pass slot collection/result reconstruction traversal for one scope. */
   private def build(node: Cli[?, ?], scope: Scope): Builder =
@@ -250,7 +269,7 @@ object Interp:
       case Cli.Pure(value) =>
         () => Right(value)
 
-      case Cli.Sub(_, _, _) =>
+      case Cli.Sub(_, _, _, _) =>
         buildSubgroup(node, scope)
 
       case Cli.OneOf(_, _) =>
@@ -300,8 +319,8 @@ object Interp:
     */
   private def collectSubs(node: Cli[?, ?], wrap: ErasedMap): List[RawSubEntry] =
     node match
-      case Cli.Sub(name, desc, inner) =>
-        List(RawSubEntry(name, desc, inner, wrap))
+      case Cli.Sub(name, desc, inner, help) =>
+        List(RawSubEntry(name, desc, inner, help, wrap))
       case Cli.OneOf(left, right) =>
         collectSubs(left, wrap) ++ collectSubs(right, wrap)
       case Cli.Mapped(inner, f) =>
@@ -352,6 +371,20 @@ object Interp:
         val inlineValue =
           if equalsAt < 0 then None
           else Some(token.substring(equalsAt + 1))
+
+        // A8.1/A8.7: help is a scanner-level slot rather than a user flag, so it is answered before
+        // the option table is consulted and it short-circuits the scan — which is what makes it beat
+        // every missing-check (A8.3). It still behaves like a flag for `=value` (A8.2). A9.2: in a
+        // help-disabled scope there is no interception at all, so the token falls through to the
+        // option table and comes back out as an ordinary UnknownOption, `=value` included.
+        if program.helpEnabled && name == Help.reservedOptionName then
+          inlineValue match
+            case Some(value) =>
+              return Left(ParseError.InvalidValue(name, value, "flag does not take a value"))
+            case None =>
+              return Left(
+                ParseError.HelpRequested(Help.render(program.cli, program.helpEnabled))
+              )
 
         scope.options.find(_.longName == name) match
           case None =>
@@ -430,7 +463,7 @@ object Interp:
       case Cli.Arg(_, _, _)     => "Arg"
       case Cli.Both(_, _)       => "Both"
       case Cli.OneOf(_, _)      => "OneOf"
-      case Cli.Sub(_, _, _)     => "Sub"
+      case Cli.Sub(_, _, _, _)  => "Sub"
       case Cli.Mapped(_, _)     => "Mapped"
       case Cli.Default(_, _)    => "Default"
       case Cli.Repeated(_)      => "Repeated"

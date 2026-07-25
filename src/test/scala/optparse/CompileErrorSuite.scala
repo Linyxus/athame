@@ -119,6 +119,52 @@ class CompileErrorSuite extends munit.FunSuite:
     )
 
   // -------------------------------------------------------------------------------------------
+  // R6 — `help` is reserved for the automatic option (A8.4)
+  // -------------------------------------------------------------------------------------------
+
+  private def assertAccepted(errors: String)(using munit.Location): Unit =
+    assertEquals(errors, "", s"expected the snippet to compile, got: $errors")
+
+  test("R6: a Flag may not be named help"):
+    assertRejected(
+      compileErrors("""compile(flag("help", 'h', "d"))"""),
+      "'help' is reserved for the automatic help option"
+    )
+
+  test("R6: an Opt may not be named help"):
+    assertRejected(
+      compileErrors("""compile(opt[Int]("help", "d"))"""),
+      "'help' is reserved for the automatic help option"
+    )
+
+  test("R6: the reservation reaches subcommand scopes too"):
+    assertRejected(
+      compileErrors("""compile(sub("go", "d", flag("help", "d")))"""),
+      "'help' is reserved"
+    )
+
+  test("R6 (A9.3): the reservation holds inside a help-disabled scope too"):
+    assertRejected(
+      compileErrors("""compile(sub("quiet", "d", flag("help", "d"), help = false))"""),
+      "'help' is reserved for the automatic help option"
+    )
+
+  test("R6 (A9.3): an Opt named help is rejected inside a help-disabled scope"):
+    assertRejected(
+      compileErrors("""compile(sub("quiet", "d", opt[Int]("help", "d"), help = false))"""),
+      "'help' is reserved"
+    )
+
+  test("R6 (A4): an Arg named help is a legal metavar"):
+    assertAccepted(compileErrors("""compile(arg[String]("help", "d"))"""))
+
+  test("R6: a subcommand named help is legal"):
+    assertAccepted(compileErrors("""compile(sub("help", "d", pure(1)))"""))
+
+  test("R6: short 'h' is not reserved"):
+    assertAccepted(compileErrors("""compile(flag("hop", 'h', "d"))"""))
+
+  // -------------------------------------------------------------------------------------------
   // Shapes that are not statically known
   // -------------------------------------------------------------------------------------------
 
@@ -147,3 +193,16 @@ class CompileErrorSuite extends munit.FunSuite:
       """),
       "statically known"
     )
+
+  test("non-literal help flag (A9.6)"):
+    assertRejected(
+      compileErrors("""
+        val b: Boolean = false
+        compile(sub("x", "d", pure(1), help = b))
+      """),
+      "statically known"
+    )
+
+  test("a literal help flag compiles in both polarities (A9.6)"):
+    assertAccepted(compileErrors("""compile(sub("x", "d", pure(1), help = false))"""))
+    assertAccepted(compileErrors("""compile(sub("x", "d", pure(1), help = true))"""))

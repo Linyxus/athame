@@ -4,6 +4,12 @@ import scala.collection.mutable.ListBuffer
 
 /** Readable, deliberately simple help text for the root command scope. */
 object Help:
+  /** The long name every scope answers to automatically (A8.1), and which no user option may claim
+    * (R6/A8.4). The macro repeats this literal instead of reading it from here: macro-time code runs
+    * before this object is guaranteed to be loadable, so the two must be kept in sync by hand.
+    */
+  private[optparse] val reservedOptionName = "help"
+
   private final case class OptionDoc(name: String, short: Option[Char], desc: String)
   private final case class ArgumentDoc(name: String, desc: String, form: ArgumentForm)
   private final case class CommandDoc(name: String, desc: String)
@@ -18,7 +24,11 @@ object Help:
     val arguments = ListBuffer.empty[ArgumentDoc]
     val commands = ListBuffer.empty[CommandDoc]
 
-  def render(cli: Cli[?, ?]): String =
+  /** `includeHelpRow` is the scope's own help-ness (A9.4): a scope that has opted out of the
+    * automatic `--help` must not advertise it. Callers that render a scope's help in response to
+    * `--help` are by definition help-enabled and pass `true`.
+    */
+  def render(cli: Cli[?, ?], includeHelpRow: Boolean = true): String =
     val doc = new RootDoc
     collect(cli, doc)
 
@@ -27,14 +37,19 @@ object Help:
       else doc.arguments.toList.map(argumentUsage)
     val usage = ("[options]" :: usageTail).mkString(" ")
 
+    // A8.5: the automatic option is the last row of the Options section, which therefore exists
+    // even for a grammar that declares no options of its own.
+    val helpRow = (s"--$reservedOptionName", "Show this help and exit")
+    val optionRows = doc.options.toList.map { option =>
+      val short = option.short.fold("")(char => s", -$char")
+      (s"--${option.name}$short", option.desc)
+    }
+
     val out = new StringBuilder(s"Usage: $usage")
     appendSection(
       out,
       "Options",
-      doc.options.toList.map { option =>
-        val short = option.short.fold("")(char => s", -$char")
-        (s"--${option.name}$short", option.desc)
-      }
+      if includeHelpRow then optionRows :+ helpRow else optionRows
     )
     appendSection(
       out,
@@ -68,7 +83,7 @@ object Help:
         collectAnnotated(inner, ArgumentForm.Repeated, doc)
       case Cli.Pure(_) =>
         ()
-      case Cli.Sub(_, _, _) =>
+      case Cli.Sub(_, _, _, _) =>
         collectCommands(node, doc)
       case Cli.OneOf(_, _) =>
         collectCommands(node, doc)
@@ -91,9 +106,10 @@ object Help:
       case other =>
         collect(other, doc)
 
+  /** A9.4: the Commands list deliberately does not mark help-disabled subcommands. */
   private def collectCommands(node: Cli[?, ?], doc: RootDoc): Unit =
     node match
-      case Cli.Sub(name, desc, _) =>
+      case Cli.Sub(name, desc, _, _) =>
         doc.commands += CommandDoc(name, desc)
       case Cli.OneOf(left, right) =>
         collectCommands(left, doc)

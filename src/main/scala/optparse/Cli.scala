@@ -6,7 +6,8 @@ package optparse
   * Users never call these constructors directly; they go through the surface API below.
   *
   * The value-level `short: Option[Char]` is deliberately not tied to the type-level `C`; the surface
-  * constructors are what keep the two in sync.
+  * constructors are what keep the two in sync. `Sub`'s `help: Boolean` mirrors its type-level `H`
+  * the same way.
   */
 enum Cli[S <: Shape, R]:
   case Flag[N <: String, C <: Char | Unit](name: N, short: Option[Char], desc: String)
@@ -19,8 +20,12 @@ enum Cli[S <: Shape, R]:
     extends Cli[Shape.Both[S1, S2], (A, B)]
   case OneOf[S1 <: Shape, S2 <: Shape, A, B](l: Cli[S1, A], r: Cli[S2, B])
     extends Cli[Shape.OneOf[S1, S2], A | B]
-  case Sub[N <: String, S1 <: Shape, A](name: N, desc: String, inner: Cli[S1, A])
-    extends Cli[Shape.Sub[N, S1], A]
+  case Sub[N <: String, S1 <: Shape, H <: Boolean, A](
+    name: N,
+    desc: String,
+    inner: Cli[S1, A],
+    help: Boolean
+  ) extends Cli[Shape.Sub[N, S1, H], A]
   case Mapped[S1 <: Shape, A, B](inner: Cli[S1, A], f: A => B)
     extends Cli[Shape.Mapped[S1], B]
   case Default[S1 <: Shape, A](inner: Cli[S1, A], default: A)
@@ -111,13 +116,26 @@ final class ArgBuilder[A] private ():
 object ArgBuilder:
   private[optparse] val instance: ArgBuilder[Any] = new ArgBuilder[Any]
 
-/** A named subcommand wrapping an inner scope. */
+/** A named subcommand wrapping an inner scope, whose scope answers `--help` (A9.1). */
 def sub[N <: String & Singleton, S <: Shape, A](
   name: N,
   desc: String,
   inner: Cli[S, A]
-): Cli[Shape.Sub[N, S], A] =
-  Cli.Sub[N, S, A](name, desc, inner)
+): Cli[Shape.Sub[N, S, true], A] =
+  Cli.Sub[N, S, true, A](name, desc, inner, true)
+
+/** A named subcommand that may opt out of the automatic `--help`: `sub(name, desc, inner, help =
+  * false)`. The literal lands in the shape, so both backends decide statically whether that scope
+  * intercepts the token. Opting out does not free the reserved name (R6/A9.3), and says nothing
+  * about subcommands nested inside — help-ness is per scope (A9.2).
+  */
+def sub[N <: String & Singleton, S <: Shape, A, H <: Boolean & Singleton](
+  name: N,
+  desc: String,
+  inner: Cli[S, A],
+  help: H
+): Cli[Shape.Sub[N, S, H], A] =
+  Cli.Sub[N, S, H, A](name, desc, inner, help)
 
 /** A constant that consumes no tokens. */
 def pure[A](value: A): Cli[Shape.Pure, A] = Cli.Pure(value)

@@ -129,7 +129,7 @@ object CompileMacro:
     case Arg(name: String, readIdx: Int)
     case Both(left: Node, right: Node)
     case OneOf(left: Node, right: Node)
-    case Sub(name: String, inner: Node)
+    case Sub(name: String, scopeIdx: Int, helpEnabled: Boolean, inner: Node)
     case Mapped(inner: Node, fIdx: Int)
     case Default(inner: Node, valueIdx: Int)
     case Repeated(inner: Node)
@@ -166,15 +166,33 @@ object CompileMacro:
     arity: Arity
   )
 
-  private final case class RawSub(name: String, inner: Node, wraps: List[Int])
+  private final case class RawSub(
+    name: String,
+    scopeIdx: Int,
+    helpEnabled: Boolean,
+    inner: Node,
+    wraps: List[Int]
+  )
   private final case class SubEntry(name: String, wraps: List[Int], scope: Scope)
+
+  /** Where a scope's `--help` text comes from, decided entirely at compile time. */
+  private enum HelpMode:
+    /** The root scope renders the captured `Cli` value; it can never opt out (A9.1). */
+    case Root
+
+    /** A subcommand with `H = true` reads `Subscopes.collect`'s table by constant index (A8.6). */
+    case Enabled(scopeIdx: Int)
+
+    /** A subcommand with `H = false`: the generated scanner has no help branch at all (A9.2). */
+    case Disabled
 
   private final case class Scope(
     slotCount: Int,
     options: List[OptionSlot],
     positionals: List[PositionalSlot],
     subs: Option[List[SubEntry]],
-    result: Build
+    result: Build,
+    help: HelpMode
   )
 
   private enum Build:
@@ -193,7 +211,7 @@ object CompileMacro:
     private val argSym = TypeRepr.of[Shape.Arg[?, ?]].typeSymbol
     private val bothSym = TypeRepr.of[Shape.Both[?, ?]].typeSymbol
     private val oneOfSym = TypeRepr.of[Shape.OneOf[?, ?]].typeSymbol
-    private val subSym = TypeRepr.of[Shape.Sub[?, ?]].typeSymbol
+    private val subSym = TypeRepr.of[Shape.Sub[?, ?, ?]].typeSymbol
     private val mappedSym = TypeRepr.of[Shape.Mapped[?]].typeSymbol
     private val defaultSym = TypeRepr.of[Shape.Default[?]].typeSymbol
     private val repeatedSym = TypeRepr.of[Shape.Repeated[?]].typeSymbol
@@ -206,13 +224,21 @@ object CompileMacro:
         counter += 1
         index
 
-      val root = analyze(decode(TypeRepr.of[S], next))
+      var scopeCounter = 0
+      val nextScope = () =>
+        val index = scopeCounter
+        scopeCounter += 1
+        index
+
+      val root = analyze(decode(TypeRepr.of[S], next, nextScope), HelpMode.Root)
       '{
         val described = $cli
         val payloads = Payloads.collect(described)
+        val subscopes = Subscopes.collect(described)
         new ParserRuntime.CompiledParser[R](
           described,
-          (args: Seq[String]) => ${ scopeExpr(root, 'args, 'payloads) }
+          (args: Seq[String]) =>
+            ${ scopeExpr(root, 'args, 'payloads, HelpSources('described, 'subscopes)) }
         )
       }
 
@@ -221,9 +247,11 @@ object CompileMacro:
     // -----------------------------------------------------------------------------------------
 
     /** Walk `S` in exactly [[Payloads.collect]]'s preorder — own payload first, then children left
-      * to right — so a node's payload index here is the index it will occupy at runtime.
+      * to right — so a node's payload index here is the index it will occupy at runtime. The same
+      * walk numbers the subcommand scopes for [[Subscopes.collect]], which contributes at `Sub`
+      * nodes only; `nextScope` is therefore drawn before descending into the inner grammar.
       */
-    private def decode(tpe: TypeRepr, next: () => Int): Node =
+    private def decode(tpe: TypeRepr, next: () => Int, nextScope: () => Int): Node =
       tpe.dealias match
         case applied @ AppliedType(tycon, args) =>
           val sym = tycon.typeSymbol
@@ -235,21 +263,24 @@ object CompileMacro:
             val readIdx = next()
             Node.Arg(literalName(args(0)), readIdx)
           else if sym == bothSym then
-            val left = decode(args(0), next)
-            val right = decode(args(1), next)
+            val left = decode(args(0), next, nextScope)
+            val right = decode(args(1), next, nextScope)
             Node.Both(left, right)
           else if sym == oneOfSym then
-            val left = decode(args(0), next)
-            val right = decode(args(1), next)
+            val left = decode(args(0), next, nextScope)
+            val right = decode(args(1), next, nextScope)
             Node.OneOf(left, right)
-          else if sym == subSym then Node.Sub(literalName(args(0)), decode(args(1), next))
+          else if sym == subSym then
+            val scopeIdx = nextScope()
+            val helpEnabled = literalBool(args(2))
+            Node.Sub(literalName(args(0)), scopeIdx, helpEnabled, decode(args(1), next, nextScope))
           else if sym == mappedSym then
             val fIdx = next()
-            Node.Mapped(decode(args(0), next), fIdx)
+            Node.Mapped(decode(args(0), next, nextScope), fIdx)
           else if sym == defaultSym then
             val valueIdx = next()
-            Node.Default(decode(args(0), next), valueIdx)
-          else if sym == repeatedSym then Node.Repeated(decode(args(0), next))
+            Node.Default(decode(args(0), next, nextScope), valueIdx)
+          else if sym == repeatedSym then Node.Repeated(decode(args(0), next, nextScope))
           else notConcrete(applied)
         case other =>
           if other.typeSymbol == pureSym then Node.Pure(next())
@@ -259,6 +290,14 @@ object CompileMacro:
       tpe.dealias match
         case ConstantType(StringConstant(value)) => value
         case other                               => notConcrete(other)
+
+    /** A9.6: `Sub`'s help flag must be a literal, so `help = someBoolean` is a non-concrete shape
+      * and takes the ordinary §7 abort rather than silently defaulting either way.
+      */
+    private def literalBool(tpe: TypeRepr): Boolean =
+      tpe.dealias match
+        case ConstantType(BooleanConstant(value)) => value
+        case other                                => notConcrete(other)
 
     private def literalShort(tpe: TypeRepr): Option[Char] =
       tpe.dealias match
@@ -286,7 +325,7 @@ object CompileMacro:
     // sub-scopes are only analyzed after the enclosing scope is known to be valid.
     // -----------------------------------------------------------------------------------------
 
-    private def analyze(root: Node): Scope =
+    private def analyze(root: Node, help: HelpMode): Scope =
       var slotCount = 0
       val options = ListBuffer.empty[OptionSlot]
       val positionals = ListBuffer.empty[PositionalSlot]
@@ -298,6 +337,13 @@ object CompileMacro:
         index
 
       def registerOption(option: OptionSlot): Unit =
+        // R6/A8.4: the generated scanner answers `--help` in every scope, so a user option cannot
+        // claim the name. Short 'h' stays free, and Arg/Sub names are unaffected. The literal is
+        // duplicated from `Help.reservedOptionName`, which macro-time code must not depend on.
+        // A9.3: the reservation is universal — a scope that opted out of auto-help still may not
+        // define its own `--help`, so that re-enabling it later cannot break a working grammar.
+        if option.name == "help" then
+          abort("option name 'help' is reserved for the automatic help option")
         if options.exists(_.name == option.name) then
           abort(s"duplicate long option name '--${option.name}' in scope")
         option.short.foreach { short =>
@@ -353,7 +399,7 @@ object CompileMacro:
           case Node.Pure(valueIdx) =>
             Build.Const(valueIdx)
 
-          case Node.Sub(_, _) | Node.OneOf(_, _) =>
+          case Node.Sub(_, _, _, _) | Node.OneOf(_, _) =>
             val raw = collectSubs(node, Nil)
             val seen = ListBuffer.empty[String]
             raw.foreach { entry =>
@@ -397,11 +443,13 @@ object CompileMacro:
           case Arity.Repeated => ()
       }
 
-      val entries = groups.headOption.map(
-        _.map(raw => SubEntry(raw.name, raw.wraps, analyze(raw.inner)))
-      )
+      val entries = groups.headOption.map(_.map { raw =>
+        val innerHelp =
+          if raw.helpEnabled then HelpMode.Enabled(raw.scopeIdx) else HelpMode.Disabled
+        SubEntry(raw.name, raw.wraps, analyze(raw.inner, innerHelp))
+      })
 
-      Scope(slotCount, options.toList, positionals.toList, entries, result)
+      Scope(slotCount, options.toList, positionals.toList, entries, result, help)
 
     /** Peel the `Mapped` nodes below a `Default`/`Repeated`. The returned maps are outermost-first;
       * they are applied to each supplied occurrence, innermost first, exactly as the interpreter's
@@ -424,7 +472,8 @@ object CompileMacro:
       */
     private def collectSubs(node: Node, wraps: List[Int]): List[RawSub] =
       node match
-        case Node.Sub(name, inner)    => List(RawSub(name, inner, wraps))
+        case Node.Sub(name, scopeIdx, helpEnabled, inner) =>
+          List(RawSub(name, scopeIdx, helpEnabled, inner, wraps))
         case Node.OneOf(left, right)  => collectSubs(left, wraps) ++ collectSubs(right, wraps)
         case Node.Mapped(inner, fIdx) => collectSubs(inner, wraps :+ fIdx)
         case other => abort(s"OneOf branch must be subcommand-rooted (found ${kindOf(other)})")
@@ -436,7 +485,7 @@ object CompileMacro:
         case Node.Arg(_, _)      => "Arg"
         case Node.Both(_, _)     => "Both"
         case Node.OneOf(_, _)    => "OneOf"
-        case Node.Sub(_, _)      => "Sub"
+        case Node.Sub(_, _, _, _) => "Sub"
         case Node.Mapped(_, _)   => "Mapped"
         case Node.Default(_, _)  => "Default"
         case Node.Repeated(_)    => "Repeated"
@@ -453,10 +502,29 @@ object CompileMacro:
 
     private type Scan = ParserRuntime.Scan
 
+    /** The two runtime handles a generated scope needs to answer `--help` (A8.6): the captured root
+      * `Cli` for the root scope, and the `Subscopes.collect` table for every nested one. Rendering
+      * stays inside the failure branch, so a parse that never sees `--help` never builds help text.
+      */
+    private final case class HelpSources(
+      rootCli: Expr[Cli[?, ?]],
+      subscopes: Expr[IArray[Cli[?, ?]]]
+    ):
+      /** `None` for a help-disabled scope, whose scanner gets no help branch at all (A9.2). The
+        * two rendering sites exist only for help-enabled scopes, so both pass the scope's own `H`
+        * (A9.4) as `includeHelpRow = true`.
+        */
+      def render(scope: Scope): Option[Expr[String]] =
+        scope.help match
+          case HelpMode.Root           => Some('{ Help.render($rootCli, true) })
+          case HelpMode.Enabled(index) => Some('{ Help.render(${ subscopes }(${ Expr(index) }), true) })
+          case HelpMode.Disabled       => None
+
     private def scopeExpr(
       scope: Scope,
       args: Expr[Seq[String]],
-      payloads: Expr[IArray[Any]]
+      payloads: Expr[IArray[Any]],
+      help: HelpSources
     ): Expr[Either[ParseError, Any]] =
       '{
         val st = new ParserRuntime.Scan($args, ${ Expr(scope.slotCount) })
@@ -464,8 +532,9 @@ object CompileMacro:
           val token = st.token
           if !st.terminated && token == "--" then st.terminate()
           else if st.terminated || ParserRuntime.isPositionalLike(token) then
-            ${ positionalOrDispatch(scope, 'st, 'token, payloads) }
-          else if token.startsWith("--") then ${ longOption(scope, 'st, 'token, payloads) }
+            ${ positionalOrDispatch(scope, 'st, 'token, payloads, help) }
+          else if token.startsWith("--") then
+            ${ longOption(scope, 'st, 'token, payloads, help.render(scope)) }
           else if token.length == 2 then ${ shortOption(scope, 'st, 'token, payloads) }
           else st.fail(ParseError.UnknownOption(token))
 
@@ -477,10 +546,11 @@ object CompileMacro:
       scope: Scope,
       st: Expr[Scan],
       token: Expr[String],
-      payloads: Expr[IArray[Any]]
+      payloads: Expr[IArray[Any]],
+      help: HelpSources
     ): Expr[Unit] =
       scope.subs match
-        case Some(entries) => dispatchExpr(entries, entries.map(_.name), st, token, payloads)
+        case Some(entries) => dispatchExpr(entries, entries.map(_.name), st, token, payloads, help)
         case None          => positionalExpr(scope.positionals, 0, st, token, payloads)
 
     private def dispatchExpr(
@@ -488,7 +558,8 @@ object CompileMacro:
       expected: List[String],
       st: Expr[Scan],
       token: Expr[String],
-      payloads: Expr[IArray[Any]]
+      payloads: Expr[IArray[Any]],
+      help: HelpSources
     ): Expr[Unit] =
       remaining match
         case Nil =>
@@ -498,9 +569,13 @@ object CompileMacro:
             if $token == ${ Expr(entry.name) } then
               val remainder = $st.rest
               $st.dispatched(${
-                wrapExpr(entry.wraps, scopeExpr(entry.scope, 'remainder, payloads), payloads)
+                wrapExpr(
+                  entry.wraps,
+                  scopeExpr(entry.scope, 'remainder, payloads, help),
+                  payloads
+                )
               })
-            else ${ dispatchExpr(rest, expected, st, token, payloads) }
+            else ${ dispatchExpr(rest, expected, st, token, payloads, help) }
           }
 
     /** Branch-local maps applied to a subcommand's result, innermost first. */
@@ -539,15 +614,48 @@ object CompileMacro:
       scope: Scope,
       st: Expr[Scan],
       token: Expr[String],
-      payloads: Expr[IArray[Any]]
+      payloads: Expr[IArray[Any]],
+      help: Option[Expr[String]]
     ): Expr[Unit] =
       '{
         val equalsAt = $token.indexOf('=')
         val name = if equalsAt < 0 then $token.substring(2) else $token.substring(2, equalsAt)
         val bound = equalsAt >= 0
         val boundValue = if equalsAt < 0 then "" else $token.substring(equalsAt + 1)
-        ${ longChain(scope.options, 'name, 'bound, 'boundValue, st, token, payloads) }
+        ${ helpOrChain(scope, 'name, 'bound, 'boundValue, st, token, payloads, help) }
       }
+
+    /** The body of the long-option branch: the option chain, preceded by the help check when this
+      * scope answers `--help`.
+      */
+    private def helpOrChain(
+      scope: Scope,
+      name: Expr[String],
+      bound: Expr[Boolean],
+      boundValue: Expr[String],
+      st: Expr[Scan],
+      token: Expr[String],
+      payloads: Expr[IArray[Any]],
+      help: Option[Expr[String]]
+    ): Expr[Unit] =
+      val chain = longChain(scope.options, name, bound, boundValue, st, token, payloads)
+      help match
+        // A8.1/A8.7: help is a scanner-level slot rather than a user option, so it is answered
+        // before the option chain and it stops the scan — which is what makes it beat every
+        // missing-check (A8.3). It still behaves like a flag for `=value` (A8.2).
+        case Some(text) =>
+          '{
+            if $name == "help" then
+              if $bound then
+                $st.fail(
+                  ParseError.InvalidValue("help", $boundValue, "flag does not take a value")
+                )
+              else $st.fail(ParseError.HelpRequested($text))
+            else $chain
+          }
+        // A9.2: a help-disabled scope emits no help branch at all, so `--help` and `--help=x` reach
+        // the option chain and fall out of it as ordinary unknown options, token as written.
+        case None => chain
 
     private def longChain(
       remaining: List[OptionSlot],

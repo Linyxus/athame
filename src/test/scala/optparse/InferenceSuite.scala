@@ -19,6 +19,8 @@ class InferenceSuite extends munit.FunSuite:
   val wArg = Wrap(arg[String]("target", "desc"))
   val wPure = Wrap(pure(42))
   val wSub = Wrap(sub("build", "desc", flag("verbose", "desc")))
+  val wSubNoHelp = Wrap(sub("build", "desc", flag("verbose", "desc"), help = false))
+  val wSubHelpTrue = Wrap(sub("build", "desc", flag("verbose", "desc"), help = true))
 
   val wBoth = Wrap(flag("verbose", 'v', "desc") ~ opt[Int]("jobs", "desc"))
   val wMapped = Wrap(opt[Int]("jobs", "desc").map(_.toString))
@@ -50,8 +52,20 @@ class InferenceSuite extends munit.FunSuite:
   test("pure") {
     assertSameType[wPure.Out, Cli[Shape.Pure, Int]]
   }
-  test("sub") {
-    assertSameType[wSub.Out, Cli[Shape.Sub["build", Shape.Flag["verbose", Unit]], Boolean]]
+  test("sub defaults to auto-help in the shape") {
+    assertSameType[wSub.Out, Cli[Shape.Sub["build", Shape.Flag["verbose", Unit], true], Boolean]]
+  }
+  test("sub with help = false puts the literal false in the shape") {
+    assertSameType[
+      wSubNoHelp.Out,
+      Cli[Shape.Sub["build", Shape.Flag["verbose", Unit], false], Boolean]
+    ]
+  }
+  test("sub with help = true is the same shape as the three-argument form") {
+    assertSameType[
+      wSubHelpTrue.Out,
+      Cli[Shape.Sub["build", Shape.Flag["verbose", Unit], true], Boolean]
+    ]
   }
   test("both") {
     assertSameType[
@@ -89,6 +103,9 @@ class InferenceSuite extends munit.FunSuite:
   test("oneOf") {
     assertSameType[
       wOneOf.Out,
-      Cli[Shape.OneOf[Shape.Sub["a", Shape.Pure], Shape.Sub["b", Shape.Pure]], Int | String]
+      Cli[
+        Shape.OneOf[Shape.Sub["a", Shape.Pure, true], Shape.Sub["b", Shape.Pure, true]],
+        Int | String
+      ]
     ]
   }

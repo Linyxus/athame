@@ -4,7 +4,8 @@ package optparse
   *
   * These traits are never instantiated: they exist only as phantom type indices carried by
   * [[Cli]]. `C = Unit` in [[Shape.Flag]] / [[Shape.Opt]] means "no short name"; otherwise `C` is a
-  * literal `Char` singleton. Names are literal `String` singletons.
+  * literal `Char` singleton. Names are literal `String` singletons. `H` in [[Shape.Sub]] is a
+  * literal `Boolean` singleton saying whether that subcommand's scope auto-accepts `--help`.
   */
 sealed trait Shape
 
@@ -14,7 +15,7 @@ object Shape:
   sealed trait Arg[N <: String, A] extends Shape
   sealed trait Both[L <: Shape, R <: Shape] extends Shape
   sealed trait OneOf[L <: Shape, R <: Shape] extends Shape
-  sealed trait Sub[N <: String, S <: Shape] extends Shape
+  sealed trait Sub[N <: String, S <: Shape, H <: Boolean] extends Shape
   sealed trait Mapped[S <: Shape] extends Shape
   sealed trait Default[S <: Shape] extends Shape
   sealed trait Repeated[S <: Shape] extends Shape

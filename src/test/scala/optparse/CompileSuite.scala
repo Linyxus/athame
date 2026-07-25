@@ -29,6 +29,8 @@ object CompiledScenarios:
   val dockerRun = compile(Scenarios.dockerRun)
   val docker = compile(Scenarios.docker)
   val unionResult = compile(Scenarios.unionResult)
+  val helpOptOut = compile(Scenarios.helpOptOut)
+  val nestedHelpOptOut = compile(Scenarios.nestedHelpOptOut)
 
 /** The same semantics [[InterpSuite]] pins for the reference interpreter, now through the
   * macro-compiled parsers: section for section, expectation for expectation. The structural-rule
@@ -406,3 +408,175 @@ class CompileSuite extends munit.FunSuite:
   test("help: defaulted positionals render bracketed"):
     val text = C.positionalWithDefault.help
     assert(text.contains("[<count>]"), text)
+
+  // -------------------------------------------------------------------------------------------
+  // Automatic --help (A8.1-A8.7), mirroring InterpSuite
+  // -------------------------------------------------------------------------------------------
+
+  private def helpOf[R](parser: Parser[R], args: String*): String =
+    parser.parse(args) match
+      case Left(ParseError.HelpRequested(text)) => text
+      case other                                => fail(s"expected help, got $other")
+
+  test("help (A8.1): --help at the root yields the root scope's rendering"):
+    assertEquals(p(C.flagsOnly, "--help"), Left(ParseError.HelpRequested(Help.render(flagsOnly))))
+
+  test("help (A8.1): --help is accepted anywhere in option position"):
+    assertEquals(
+      p(C.typedOpts, "-j", "4", "--help"),
+      Left(ParseError.HelpRequested(Help.render(typedOpts)))
+    )
+
+  test("help (A8.2): after dispatch, --help belongs to the inner scope"):
+    // `docker` is a single `sub("run", …, dockerRun)`, so the inner scope is exactly `dockerRun`.
+    assertEquals(
+      p(C.docker, "run", "--help"),
+      Left(ParseError.HelpRequested(Help.render(dockerRun)))
+    )
+
+  test("help (A8.2): a subcommand's help describes the subcommand, not its parent"):
+    val text = helpOf(C.git, "clone", "--help")
+    assert(text.contains("<repo>"), text)
+    assert(text.contains("--depth"), text)
+    assert(!text.contains("remote"), text)
+
+  test("help (A8.2): a doubly nested subcommand renders the innermost scope"):
+    val text = helpOf(C.git, "remote", "add", "--help")
+    assert(text.contains("name"), text)
+    assert(text.contains("url"), text)
+    assert(!text.contains("clone"), text)
+
+  test("help (A8.2): the parent scope's help lists its own commands"):
+    val text = helpOf(C.git, "--help")
+    assert(text.contains("clone"), text)
+    assert(text.contains("remote"), text)
+    assert(text.contains("--verbose"), text)
+
+  test("help (A8.3): help wins over missing required positionals"):
+    assertEquals(
+      p(C.docker, "run", "--help"),
+      Left(ParseError.HelpRequested(Help.render(dockerRun)))
+    )
+
+  test("help (A8.3): help wins over missing required options"):
+    val text = helpOf(C.unionResult, "count", "--help")
+    assert(text.contains("--value"), text)
+
+  test("help (A8.3): an earlier token-level error wins over a later --help"):
+    assertEquals(p(C.flagsOnly, "--bogus", "--help"), Left(ParseError.UnknownOption("--bogus")))
+
+  test("help (A8.3): --help short-circuits before a later bad token"):
+    assertEquals(
+      p(C.flagsOnly, "--help", "--bogus"),
+      Left(ParseError.HelpRequested(Help.render(flagsOnly)))
+    )
+
+  test("help (A8.2): after --, --help is an ordinary positional that fills a slot"):
+    assertEquals(p(C.twoRequiredPositionals, "--", "--help", "b"), Right(("--help", "b")))
+
+  test("help (A8.2): after --, --help with no slot is an unexpected argument"):
+    assertEquals(p(C.flagsOnly, "--", "--help"), Left(ParseError.UnexpectedArgument("--help")))
+
+  test("help (A8.2): --help=value is an InvalidValue, like any other flag"):
+    assertEquals(
+      p(C.flagsOnly, "--help=x"),
+      Left(ParseError.InvalidValue("help", "x", "flag does not take a value"))
+    )
+
+  test("help (A8.5): the rendering lists --help beside the scope's own options"):
+    val text = helpOf(C.flagsOnly, "--help")
+    assert(text.contains("--help"), text)
+    assert(text.contains("Show this help and exit"), text)
+    assert(text.contains("--verbose"), text)
+    assert(text.contains("--force"), text)
+
+  test("help (A8.5): a grammar with no options of its own still documents --help"):
+    val text = helpOf(C.twoRequiredPositionals, "--help")
+    assert(text.contains("--help"), text)
+    assert(text.contains("<source>"), text)
+
+  test("help (A8.6): a subcommand named help still dispatches"):
+    val parser = compile(sub("help", "d", pure(1)) | sub("go", "d", pure(2)))
+    assertEquals(p(parser, "help"), Right(1))
+    assertEquals(p(parser, "go"), Right(2))
+
+  test("help (A8.6): the subscope table stays aligned across branch-local maps"):
+    // Maps between a group and its `Sub`s consume payload indices but no scope indices, so this is
+    // the shape where the two preorder walks are easiest to knock out of step. Each scope below
+    // renders differently, which is what makes an off-by-one visible.
+    val cli =
+      (sub("a", "d", opt[Int]("n", 'n', "d")).map(v => s"a$v") |
+        sub(
+          "b",
+          "d",
+          sub("x", "d", arg[String]("path", "d")).map(v => s"x$v") |
+            sub("y", "d", flag("deep", "d"))
+        ).map(v => s"b$v")).map(v => s"[$v]")
+    val parser = compile(cli)
+    List(
+      List("--help"),
+      List("a", "--help"),
+      List("b", "--help"),
+      List("b", "x", "--help"),
+      List("b", "y", "--help")
+    ).foreach { args =>
+      assertEquals(parser.parse(args), Interp.parse(cli, args), args.mkString("[", ", ", "]"))
+    }
+    assert(helpOf(parser, "b", "x", "--help").contains("<path>"))
+    assert(helpOf(parser, "b", "y", "--help").contains("--deep"))
+
+  // -------------------------------------------------------------------------------------------
+  // Per-subcommand help opt-out (A9.1-A9.7), mirroring InterpSuite
+  // -------------------------------------------------------------------------------------------
+
+  test("help (A9.2): a help-disabled scope treats --help as an unknown option"):
+    assertEquals(p(C.helpOptOut, "version", "--help"), Left(ParseError.UnknownOption("--help")))
+
+  test("help (A9.2): --help=x in a help-disabled scope is unknown, token as written"):
+    // A1 does not apply: `help` is not a known option there, so this is A2, not InvalidValue.
+    assertEquals(p(C.helpOptOut, "version", "--help=x"), Left(ParseError.UnknownOption("--help=x")))
+
+  test("help (A9.2): a help-disabled scope parses normally otherwise"):
+    assertEquals(p(C.helpOptOut, "version"), Right("0.1.0"))
+    assertEquals(p(C.helpOptOut, "version", "extra"), Left(ParseError.UnexpectedArgument("extra")))
+    assertEquals(
+      p(C.helpOptOut, "version", "--", "--help"),
+      Left(ParseError.UnexpectedArgument("--help"))
+    )
+
+  test("help (A9.2): a help-enabled sibling is unaffected"):
+    val text = helpOf(C.helpOptOut, "build", "--help")
+    assert(text.contains("--fast"), text)
+    assert(text.contains("<target>"), text)
+
+  test("help (A9.1): the root scope keeps auto-help beside an opted-out subcommand"):
+    val text = helpOf(C.helpOptOut, "--help")
+    assert(text.contains("--help"), text)
+    assert(text.contains("version"), text)
+    assert(text.contains("build"), text)
+
+  test("help (A9.2): help-ness is not inherited by nested scopes"):
+    assertEquals(p(C.nestedHelpOptOut, "outer", "--help"), Left(ParseError.UnknownOption("--help")))
+    val text = helpOf(C.nestedHelpOptOut, "outer", "inner", "--help")
+    assert(text.contains("--depth"), text)
+
+  test("help (A9.2): a silent scope nested inside a silent scope stays silent"):
+    assertEquals(
+      p(C.nestedHelpOptOut, "outer", "mute", "--help"),
+      Left(ParseError.UnknownOption("--help"))
+    )
+    assertEquals(p(C.nestedHelpOptOut, "outer", "mute", "--loud"), Right(true))
+
+  test("help (A9.4): the Commands list does not mark help-disabled subcommands"):
+    // Both rows are plain name/description pairs; `version` carries no hint that it is silent.
+    val text = C.helpOptOut.help
+    assert(text.contains("version  Print the version number"), text)
+    assert(text.contains("build    Compile a target"), text)
+
+  test("help (A9.5): the subscope table still numbers help-disabled scopes"):
+    // `outer` opts out but still occupies a slot in `Subscopes.collect`, so its help-enabled child
+    // would read the wrong scope if the walk had become help-dependent.
+    assertEquals(
+      p(C.nestedHelpOptOut, "outer", "inner", "--help"),
+      Interp.parse(Scenarios.nestedHelpOptOut, Seq("outer", "inner", "--help"))
+    )

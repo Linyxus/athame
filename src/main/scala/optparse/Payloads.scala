@@ -17,6 +17,9 @@ import scala.collection.mutable.ArrayBuffer
   * parser, which then reads its payloads back by constant index. Changing the walk here without
   * changing the macro (or vice versa) yields parsers that still compile but use the wrong payloads,
   * so keep this deliberately dumb and keep the two walks side by side.
+  *
+  * [[Subscopes.collect]] repeats this traversal for a different payload (the scopes reachable for
+  * `--help`); the node order there must stay identical to the one below.
   */
 object Payloads:
 
@@ -39,7 +42,7 @@ object Payloads:
       case Cli.OneOf(left, right) =>
         walk(left, out)
         walk(right, out)
-      case Cli.Sub(_, _, inner) =>
+      case Cli.Sub(_, _, inner, _) =>
         walk(inner, out)
       case Cli.Mapped(inner, f) =>
         out += f

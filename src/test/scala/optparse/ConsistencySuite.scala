@@ -43,7 +43,14 @@ class ConsistencySuite extends munit.FunSuite:
         List("stray"),
         List("--", "stray"),
         List("-"),
-        List("-2")
+        List("-2"),
+        List("--help"),
+        List("-v", "--help"),
+        List("--help", "--frobnicate"),
+        List("--frobnicate", "--help"),
+        List("--help=1"),
+        List("--help="),
+        List("--", "--help")
       )
     )
 
@@ -66,7 +73,11 @@ class ConsistencySuite extends munit.FunSuite:
         List("-j=4"),
         List("--frob"),
         List("-j", "4", "extra"),
-        List("--jobs", "--ratio")
+        List("--jobs", "--ratio"),
+        List("--help"),
+        List("-j", "4", "--help"),
+        List("--jobs", "--help"),
+        List("--help=x")
       )
     )
 
@@ -151,7 +162,11 @@ class ConsistencySuite extends munit.FunSuite:
         List("--", "a", "--"),
         List("-", "-2"),
         List("--flag", "a"),
-        List("a", "-x", "b")
+        List("a", "-x", "b"),
+        List("--help"),
+        List("a", "--help"),
+        List("--", "--help", "b"),
+        List("--", "--help", "b", "c")
       )
     )
 
@@ -183,7 +198,10 @@ class ConsistencySuite extends munit.FunSuite:
         List("sh", "a", "b", "c", "d"),
         List("sh", "--", "-x", "-y"),
         List("--", "sh", "a"),
-        List("-x", "sh")
+        List("-x", "sh"),
+        List("--help"),
+        List("sh", "--help"),
+        List("sh", "--", "--help", "a")
       )
     )
 
@@ -302,7 +320,19 @@ class ConsistencySuite extends munit.FunSuite:
         List("clone", "repo", "-v"),
         List("--", "clone", "repo"),
         List("--verbose", "clone", "repo", "--depth"),
-        List("-x", "clone")
+        List("-x", "clone"),
+        List("--help"),
+        List("-v", "--help"),
+        List("clone", "--help"),
+        List("clone", "repo", "--help"),
+        List("remote", "--help"),
+        List("remote", "add", "--help"),
+        List("remote", "add", "o", "--help"),
+        List("remote", "list", "--help"),
+        List("--", "clone", "--help"),
+        List("--help", "clone"),
+        List("clone", "--help=x"),
+        List("push", "--help")
       )
     )
 
@@ -334,7 +364,13 @@ class ConsistencySuite extends munit.FunSuite:
         List("run", "-d"),
         List("run", "img", "--", "--flag"),
         List("build"),
-        List("--", "run", "img")
+        List("--", "run", "img"),
+        List("--help"),
+        List("run", "--help"),
+        List("run", "--help=1"),
+        List("run", "img", "--help"),
+        List("run", "img", "--", "--help"),
+        List("--", "run", "--help")
       )
     )
 
@@ -352,7 +388,61 @@ class ConsistencySuite extends munit.FunSuite:
         List("label", "hi"),
         List("label"),
         List("label", "a", "b"),
-        List("other")
+        List("other"),
+        List("--help"),
+        List("count", "--help"),
+        List("label", "--help"),
+        List("label", "hi", "--help")
+      )
+    )
+
+  test("consistency: helpOptOut"):
+    agree(
+      "helpOptOut",
+      Scenarios.helpOptOut,
+      C.helpOptOut,
+      List(
+        Nil,
+        List("--help"),
+        List("version"),
+        List("version", "--help"),
+        List("version", "--help=x"),
+        List("version", "--help", "--help"),
+        List("version", "--", "--help"),
+        List("version", "extra"),
+        List("version", "--bogus", "--help"),
+        List("build", "T"),
+        List("build", "--help"),
+        List("build", "--help=x"),
+        List("build", "-f", "--help"),
+        List("build", "--", "--help"),
+        List("build"),
+        List("--help", "version"),
+        List("nope", "--help")
+      )
+    )
+
+  test("consistency: nestedHelpOptOut"):
+    agree(
+      "nestedHelpOptOut",
+      Scenarios.nestedHelpOptOut,
+      C.nestedHelpOptOut,
+      List(
+        Nil,
+        List("--help"),
+        List("outer"),
+        List("outer", "--help"),
+        List("outer", "--help=x"),
+        List("outer", "inner"),
+        List("outer", "inner", "--help"),
+        List("outer", "inner", "-d", "2"),
+        List("outer", "inner", "--depth", "--help"),
+        List("outer", "mute"),
+        List("outer", "mute", "--help"),
+        List("outer", "mute", "--help=x"),
+        List("outer", "mute", "--loud"),
+        List("outer", "mute", "--", "--help"),
+        List("outer", "frob", "--help")
       )
     )
 
@@ -390,7 +480,8 @@ class ConsistencySuite extends munit.FunSuite:
       round += 1
 
   private val junk =
-    Vector("-", "--", "-2", "-x", "--frob", "--frob=1", "-vq", "", "x", "=", "--=1")
+    Vector("-", "--", "-2", "-x", "--frob", "--frob=1", "-vq", "", "x", "=", "--=1", "--help",
+      "--help=1")
 
   test("fuzz: flagsOnly"):
     fuzz(
@@ -473,4 +564,20 @@ class ConsistencySuite extends munit.FunSuite:
       Scenarios.unionResult,
       C.unionResult,
       junk ++ Vector("count", "label", "-n", "--value", "5", "hi")
+    )
+
+  test("fuzz: helpOptOut"):
+    fuzz(
+      "helpOptOut",
+      Scenarios.helpOptOut,
+      C.helpOptOut,
+      junk ++ Vector("version", "build", "T", "-f", "--fast")
+    )
+
+  test("fuzz: nestedHelpOptOut"):
+    fuzz(
+      "nestedHelpOptOut",
+      Scenarios.nestedHelpOptOut,
+      C.nestedHelpOptOut,
+      junk ++ Vector("outer", "inner", "mute", "-d", "--depth", "2", "--loud")
     )

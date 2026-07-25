@@ -5,8 +5,13 @@ package optparse
   * Naming convention: [[UnknownOption]] carries the token *as written* (dashes included); every
   * other case that names an option carries its bare long name (no dashes), even when the user wrote
   * the short form.
+  *
+  * [[HelpRequested]] is a `Left` without being a failure: `--help` short-circuits the scan and
+  * hands back the rendered help for the scope that saw the token, so callers report it and exit
+  * successfully rather than complaining.
   */
 enum ParseError:
+  case HelpRequested(help: String)
   case UnknownOption(name: String)
   case MissingOption(name: String)
   case MissingValue(name: String)
