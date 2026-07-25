@@ -1,0 +1,10 @@
+target/
+project/target/
+project/project/
+dist/
+.bsp/
+.metals/
+.bloop/
+.vscode/
+node_modules/
+.auk/
