@@ -47,5 +47,9 @@ object Cli:
           "log",
           "Show generation details, newest first",
           pure(Command.SyncLog)
+        ) | sub(
+          "diff",
+          "Show changes since the last completed generation",
+          pure(Command.SyncDiff)
         )
       )

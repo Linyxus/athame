@@ -14,7 +14,7 @@ class CliSuite extends munit.FunSuite:
 
   private def parse(args: String*): Either[ParseError, Command] = parser.parse(args)
 
-  private val syncSubcommands = List("begin", "commit", "abort", "list", "log")
+  private val syncSubcommands = List("begin", "commit", "abort", "list", "log", "diff")
 
   private def help(result: Either[ParseError, Command])(using munit.Location): String =
     result match
@@ -43,6 +43,9 @@ class CliSuite extends munit.FunSuite:
   test("commands: sync log"):
     assertEquals(parse("sync", "log"), Right(Command.SyncLog))
 
+  test("commands: sync diff"):
+    assertEquals(parse("sync", "diff"), Right(Command.SyncDiff))
+
   // -------------------------------------------------------------------------------------------
   // Missing and unknown subcommands
   // -------------------------------------------------------------------------------------------
@@ -50,7 +53,7 @@ class CliSuite extends munit.FunSuite:
   test("subcommands: an empty argv asks for one of the root commands"):
     assertEquals(parse(), Left(ParseError.MissingSubcommand(List("version", "sync"))))
 
-  test("subcommands: bare sync asks for one of its five"):
+  test("subcommands: bare sync asks for one of its six"):
     assertEquals(parse("sync"), Left(ParseError.MissingSubcommand(syncSubcommands)))
 
   test("subcommands: an unknown sync subcommand lists the ones that exist"):
@@ -80,6 +83,7 @@ class CliSuite extends munit.FunSuite:
     syncSubcommands.foreach(name => assert(text.contains(name), clue(text)))
     assert(text.contains("Begin a new generation (records the pre-sync snapshot)"), clue(text))
     assert(text.contains("Show generation details, newest first"), clue(text))
+    assert(text.contains("Show changes since the last completed generation"), clue(text))
 
   /** A scope's help describes what that scope contains, so `begin` — which contains nothing but its
     * own `--help` — renders a bare block. What makes it begin's help rather than sync's is that the
@@ -90,6 +94,12 @@ class CliSuite extends munit.FunSuite:
     assert(text.contains("--help"), clue(text))
     assert(!text.contains("Commands"), clue(text))
     syncSubcommands.foreach(name => assert(!text.contains(name), clue(text)))
+    assertNotEquals(text, help(parse("sync", "--help")))
+
+  test("help: diff answers for its own scope too"):
+    val text = help(parse("sync", "diff", "--help"))
+    assert(text.contains("--help"), clue(text))
+    assert(!text.contains("Commands"), clue(text))
     assertNotEquals(text, help(parse("sync", "--help")))
 
   test("help: version opted out, so --help there is an unknown option"):

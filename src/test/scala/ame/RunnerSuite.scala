@@ -215,6 +215,134 @@ class RunnerSuite extends munit.FunSuite:
       assert(lines(7).startsWith("  post: "), clue(lines(7)))
 
   // -------------------------------------------------------------------------------------------
+  // diff
+  // -------------------------------------------------------------------------------------------
+
+  /** Drives one committed generation into the repository and leaves `a.txt` holding `content`. */
+  private def committedGeneration(repo: git.TempRepo, content: String): Unit =
+    run(repo, Command.SyncBegin)
+    repo.write("a.txt", content)
+    run(repo, Command.SyncCommit)
+
+  test("diff: with no generations there is nothing to diff against"):
+    withRepo: repo =>
+      seed(repo)
+      assertEquals(
+        run(repo, Command.SyncDiff),
+        Outcome("", "error: no completed generation to diff against\n", 1)
+      )
+
+  test("diff: an open generation alone is still nothing to diff against"):
+    withRepo: repo =>
+      seed(repo)
+      run(repo, Command.SyncBegin)
+      assertEquals(
+        run(repo, Command.SyncDiff),
+        Outcome("", "error: no completed generation to diff against\n", 1)
+      )
+
+  test("diff: an untouched working tree has no changes"):
+    withRepo: repo =>
+      seed(repo)
+      run(repo, Command.SyncBegin)
+      run(repo, Command.SyncCommit)
+      assertEquals(run(repo, Command.SyncDiff), Outcome("no changes since generation 1\n", "", 0))
+
+  test("diff: an edited tracked file shows its before and after"):
+    withRepo: repo =>
+      seed(repo)
+      run(repo, Command.SyncBegin)
+      run(repo, Command.SyncCommit)
+      repo.write("a.txt", "edited by hand")
+      val outcome = run(repo, Command.SyncDiff)
+      assertEquals(outcome.err, "")
+      assertEquals(outcome.exit, 0)
+      assert(outcome.out.contains("diff --git a/a.txt b/a.txt"), clue(outcome.out))
+      assert(outcome.out.contains("-hello"), clue(outcome.out))
+      assert(outcome.out.contains("+edited by hand"), clue(outcome.out))
+      assert(outcome.out.endsWith("\n"), clue(outcome.out))
+
+  test("diff: a new untracked file shows up as an addition"):
+    withRepo: repo =>
+      seed(repo)
+      run(repo, Command.SyncBegin)
+      run(repo, Command.SyncCommit)
+      repo.write("added.txt", "brand new")
+      val outcome = run(repo, Command.SyncDiff)
+      assertEquals(outcome.exit, 0)
+      assert(outcome.out.contains("diff --git a/added.txt b/added.txt"), clue(outcome.out))
+      assert(outcome.out.contains("new file mode"), clue(outcome.out))
+      assert(outcome.out.contains("+brand new"), clue(outcome.out))
+
+  test("diff: a deleted tracked file shows up as a deletion"):
+    withRepo: repo =>
+      seed(repo)
+      run(repo, Command.SyncBegin)
+      run(repo, Command.SyncCommit)
+      repo.remove("a.txt")
+      val outcome = run(repo, Command.SyncDiff)
+      assertEquals(outcome.exit, 0)
+      assert(outcome.out.contains("diff --git a/a.txt b/a.txt"), clue(outcome.out))
+      assert(outcome.out.contains("deleted file mode"), clue(outcome.out))
+      assert(outcome.out.contains("-hello"), clue(outcome.out))
+
+  test("diff: a change to an ignored file is not drift"):
+    withRepo: repo =>
+      repo.write(".gitignore", "ignored.txt\n")
+      repo.write("a.txt", "hello")
+      repo.commit("init")
+      run(repo, Command.SyncBegin)
+      run(repo, Command.SyncCommit)
+      repo.write("ignored.txt", "noise")
+      assertEquals(run(repo, Command.SyncDiff), Outcome("no changes since generation 1\n", "", 0))
+
+  test("diff: the baseline is the newest committed generation, not the first"):
+    withRepo: repo =>
+      seed(repo)
+      committedGeneration(repo, "first sync")
+      committedGeneration(repo, "second sync")
+      repo.write("a.txt", "human edit")
+      val outcome = run(repo, Command.SyncDiff)
+      assertEquals(outcome.err, "")
+      assertEquals(outcome.exit, 0)
+      assert(outcome.out.contains("-second sync"), clue(outcome.out))
+      assert(outcome.out.contains("+human edit"), clue(outcome.out))
+      // Generation 1's content would appear as the removed side if it were the baseline.
+      assert(!outcome.out.contains("first sync"), clue(outcome.out))
+
+  test("diff: an open generation on top does not become the baseline"):
+    withRepo: repo =>
+      seed(repo)
+      committedGeneration(repo, "first sync")
+      committedGeneration(repo, "second sync")
+      run(repo, Command.SyncBegin)
+      repo.write("a.txt", "work in progress")
+      val outcome = run(repo, Command.SyncDiff)
+      assertEquals(outcome.exit, 0)
+      assert(outcome.out.contains("-second sync"), clue(outcome.out))
+      assert(outcome.out.contains("+work in progress"), clue(outcome.out))
+      assert(!outcome.out.contains("first sync"), clue(outcome.out))
+
+  test("diff: the no-changes line names the last committed generation"):
+    withRepo: repo =>
+      seed(repo)
+      committedGeneration(repo, "first sync")
+      committedGeneration(repo, "second sync")
+      assertEquals(run(repo, Command.SyncDiff), Outcome("no changes since generation 2\n", "", 0))
+
+  test("diff: corruption is reported rather than diffed"):
+    withRepo: repo =>
+      seed(repo)
+      run(repo, Command.SyncBegin)
+      run(repo, Command.SyncCommit)
+      plant(repo, "sync/7/post")
+      val outcome = run(repo, Command.SyncDiff)
+      assertEquals(outcome.out, "")
+      assertEquals(outcome.exit, 1)
+      assert(outcome.err.startsWith("error: corrupt sync state: "), clue(outcome.err))
+      assert(outcome.err.contains("7"), clue(outcome.err))
+
+  // -------------------------------------------------------------------------------------------
   // Failures
   // -------------------------------------------------------------------------------------------
 
@@ -226,6 +354,7 @@ class RunnerSuite extends munit.FunSuite:
       assertEquals(Runner.execute(Command.SyncAbort, dir), expected)
       assertEquals(Runner.execute(Command.SyncList, dir), expected)
       assertEquals(Runner.execute(Command.SyncLog, dir), expected)
+      assertEquals(Runner.execute(Command.SyncDiff, dir), expected)
 
   test("corrupt: list explains what is broken"):
     withRepo: repo =>
@@ -276,6 +405,7 @@ class RunnerSuite extends munit.FunSuite:
         run(repo, Command.SyncBegin),
         run(repo, Command.SyncCommit),
         run(repo, Command.SyncLog),
+        run(repo, Command.SyncDiff),
         Runner.execute(Command.Version, repo.dir)
       )
       successes.foreach { outcome =>
@@ -290,6 +420,7 @@ class RunnerSuite extends munit.FunSuite:
       val failures = List(
         run(repo, Command.SyncCommit),
         run(repo, Command.SyncAbort),
+        run(repo, Command.SyncDiff),
         Runner.execute(Command.SyncList, "/definitely/not/a/repository")
       )
       failures.foreach { outcome =>

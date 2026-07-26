@@ -8,4 +8,4 @@ package ame
   * parameters, and the CLI tree gains them at the matching `sub`.
   */
 enum Command:
-  case Version, SyncBegin, SyncCommit, SyncAbort, SyncList, SyncLog
+  case Version, SyncBegin, SyncCommit, SyncAbort, SyncList, SyncLog, SyncDiff

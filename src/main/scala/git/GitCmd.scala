@@ -49,17 +49,31 @@ private[git] object GitCmd:
   private val MaxBuffer = 64 * 1024 * 1024
 
   /** Runs `git -C <dir> <args...>` with `extraEnv` layered over the ambient environment and returns
-    * trimmed stdout. `execFileSync` replaces the environment wholesale rather than extending it, so
-    * the ambient one is copied in first — dropping it would lose PATH, HOME and the git config it
-    * points at.
+    * trimmed stdout, which is what almost every caller wants: git terminates an object id or a ref
+    * name with a newline nobody is interested in.
     */
   def run(
     dir: String,
     extraEnv: Map[String, String],
     args: String*
   ): Either[GitError.CommandFailed, String] =
+    raw(dir, extraEnv, args*).map(_.trim)
+
+  /** [[run]] without the trim: stdout exactly as git wrote it.
+    *
+    * For output that is content rather than an answer — a patch, a blob — the bytes are the point,
+    * and a trailing newline is part of them. Trimming and then adding one back would be a guess.
+    *
+    * `execFileSync` replaces the environment wholesale rather than extending it, so the ambient one
+    * is copied in first: dropping it would lose PATH, HOME and the git config they point at.
+    */
+  def raw(
+    dir: String,
+    extraEnv: Map[String, String],
+    args: String*
+  ): Either[GitError.CommandFailed, String] =
     val argv = "-C" :: dir :: args.toList
-    try Right(text(NodeChildProcess.execFileSync("git", js.Array(argv*), options(dir, extraEnv))).trim)
+    try Right(text(NodeChildProcess.execFileSync("git", js.Array(argv*), options(dir, extraEnv))))
     catch
       case js.JavaScriptException(error) =>
         val thrown = error.asInstanceOf[js.Dynamic]

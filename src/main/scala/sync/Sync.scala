@@ -79,6 +79,19 @@ object Sync:
   def list(dir: String): Either[SyncError, List[Generation]] =
     scan(dir).flatMap(slots => traverse(slots)(hydrate(dir, _)))
 
+  /** The newest generation that ran to completion, if any.
+    *
+    * An open generation is not a candidate: its post snapshot does not exist yet, so there is no
+    * recorded "after" state to measure anything against. A caller asking this question is asking
+    * where the last known-good synced state is, and mid-sync that is still the generation before.
+    */
+  def lastCompleted(dir: String): Either[SyncError, Option[Generation]] =
+    for
+      slots    <- scan(dir)
+      newest    = slots.filter(_.post.isDefined).lastOption
+      hydrated <- traverse(newest.toList)(hydrate(dir, _))
+    yield hydrated.headOption
+
   /** The open generation, if there is one. */
   def current(dir: String): Either[SyncError, Option[Generation]] =
     for

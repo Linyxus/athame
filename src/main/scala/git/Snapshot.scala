@@ -145,6 +145,53 @@ object Snapshot:
       date <- GitCmd.run(dir, Map.empty, "show", "-s", "--format=%cI", commit)
     yield date
 
+  /** The tree the working directory would produce right now, without recording anything.
+    *
+    * Capture is identical to [[create]] — same temp index, same `add -A`, so the same tracked and
+    * untracked-but-not-ignored files participate — and it stops one step short: a tree object is
+    * written and nothing points at it. No commit, no ref, no disturbance. The object is left
+    * unreferenced for git's own garbage collection, exactly as `git stash` leaves the trees it
+    * writes and abandons.
+    *
+    * Comparing this against a recorded snapshot's tree is how a caller asks "what has drifted since
+    * then", which is the reason it is public.
+    */
+  def currentTree(dir: String): Either[GitError, String] =
+    for
+      _    <- requireRepository(dir)
+      tree <- writeSnapshotTree(dir, headCommit(dir))
+    yield tree
+
+  /** A patch from `oldTree` to `newTree`, as git's own bytes — empty when the trees are equal.
+    *
+    * The invocation is armored so the output depends on the trees and nothing else: no color, no
+    * external diff driver, no textconv filter, and the `a/`/`b/` prefixes pinned against the config
+    * that would rename or drop them. Rename detection is deliberately off — a rename reported as
+    * such hides the file's content, while a delete plus an add spells it out, which is what a reader
+    * reconstructing the change needs.
+    *
+    * The result keeps its trailing newline: it is a patch, not an answer.
+    */
+  def diffTrees(dir: String, oldTree: String, newTree: String): Either[GitError, String] =
+    for
+      _ <- requireRepository(dir)
+      patch <- GitCmd.raw(
+        dir,
+        Map.empty,
+        "-c",
+        "diff.mnemonicPrefix=false",
+        "-c",
+        "diff.noprefix=false",
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        oldTree,
+        newTree
+      )
+    yield patch
+
   // -----------------------------------------------------------------------------------------
   // Steps
   // -----------------------------------------------------------------------------------------

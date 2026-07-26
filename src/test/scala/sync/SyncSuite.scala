@@ -258,6 +258,47 @@ class SyncSuite extends munit.FunSuite:
       assertEquals(Sync.current(repo.dir), Right(None))
 
   // -------------------------------------------------------------------------------------------
+  // lastCompleted
+  // -------------------------------------------------------------------------------------------
+
+  test("lastCompleted: a fresh repository has none"):
+    withRepo: repo =>
+      seed(repo)
+      assertEquals(Sync.lastCompleted(repo.dir), Right(None))
+
+  test("lastCompleted: an open generation is not a completed one"):
+    withRepo: repo =>
+      seed(repo)
+      ok(Sync.begin(repo.dir))
+      assertEquals(Sync.lastCompleted(repo.dir), Right(None))
+
+  test("lastCompleted: the newest committed generation wins"):
+    withRepo: repo =>
+      seed(repo)
+      ok(Sync.begin(repo.dir))
+      ok(Sync.commit(repo.dir))
+      repo.write("a.txt", "second")
+      ok(Sync.begin(repo.dir))
+      val second = ok(Sync.commit(repo.dir))
+      assertEquals(Sync.lastCompleted(repo.dir), Right(Some(second)))
+
+  test("lastCompleted: an open generation on top does not displace it"):
+    withRepo: repo =>
+      seed(repo)
+      ok(Sync.begin(repo.dir))
+      val committed = ok(Sync.commit(repo.dir))
+      repo.write("a.txt", "in progress")
+      ok(Sync.begin(repo.dir))
+      assertEquals(Sync.lastCompleted(repo.dir), Right(Some(committed)))
+      assertEquals(ok(Sync.current(repo.dir)).map(_.number), Some(2))
+
+  test("lastCompleted: corruption surfaces rather than being scanned past"):
+    withRepo: repo =>
+      seed(repo)
+      plant(repo, "sync/7/post")
+      assertCorrupt(Sync.lastCompleted(repo.dir), "7")
+
+  // -------------------------------------------------------------------------------------------
   // abort (G2, G5)
   // -------------------------------------------------------------------------------------------
 

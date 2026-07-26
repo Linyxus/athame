@@ -1,7 +1,8 @@
 package git
 
-/** Tests for [[Snapshot.treeOf]], the tree lookup layers above this one use to tell two recorded
-  * states apart.
+/** Tests for the read-only corners of [[Snapshot]] that layers above use to compare recorded states:
+  * looking a tree up, dating a commit, hashing the working tree without recording it, and diffing
+  * two trees.
   */
 class TreeOfSuite extends munit.FunSuite:
 
@@ -95,6 +96,95 @@ class TreeOfSuite extends munit.FunSuite:
       Snapshot.committedAt(repo.dir, "no-such-revision") match
         case Left(GitError.CommandFailed(args, exitCode, stderr)) =>
           assert(args.contains("show"), clue(args))
+          assertNotEquals(exitCode, 0)
+          assert(stderr.nonEmpty, "git was supposed to explain itself")
+        case other => fail(s"expected CommandFailed, got $other")
+
+  // -------------------------------------------------------------------------------------------
+  // currentTree and diffTrees
+  // -------------------------------------------------------------------------------------------
+
+  /** Leftover temp indexes belonging to this process. The suite runs in its own temp directory, and
+    * the pid in the name narrows it further.
+    */
+  private def tempIndexes(): Set[String] =
+    TestFs.readdirSync(TestOs.tmpdir()).toSet.filter(_.startsWith(s"ame-index-${NodeProcess.pid}-"))
+
+  test("currentTree: is the tree a snapshot of the same state would record"):
+    withRepo: repo =>
+      repo.write("a.txt", "hello")
+      repo.commit("init")
+      repo.write("a.txt", "edited")
+      repo.write("untracked.txt", "loose")
+      val snapshot = created(Snapshot.create(repo.dir, "s1"))
+      assertEquals(Snapshot.currentTree(repo.dir), Right(snapshot.tree))
+
+  test("currentTree: honors gitignore, like every other capture"):
+    withRepo: repo =>
+      repo.write(".gitignore", "ignored.txt\n")
+      repo.write("a.txt", "hello")
+      repo.commit("init")
+      val before = Snapshot.currentTree(repo.dir)
+      repo.write("ignored.txt", "noise")
+      assertEquals(Snapshot.currentTree(repo.dir), before)
+
+  test("currentTree: writes a tree and nothing else"):
+    withRepo: repo =>
+      repo.write("a.txt", "hello")
+      val head = repo.commit("init")
+      repo.write("staged.txt", "staged")
+      repo.git("add", "staged.txt")
+      repo.write("a.txt", "unstaged edit")
+      val status = repo.status
+      val staged = repo.git("diff", "--cached")
+      val indexes = tempIndexes()
+
+      assert(Snapshot.currentTree(repo.dir).isRight)
+
+      assertEquals(repo.status, status)
+      assertEquals(repo.git("diff", "--cached"), staged)
+      assertEquals(repo.head, head)
+      assertEquals(Snapshot.list(repo.dir), Right(Nil))
+      assertEquals(tempIndexes().diff(indexes), Set.empty[String])
+
+  test("currentTree: an unborn HEAD still yields a tree"):
+    withRepo: repo =>
+      repo.write("a.txt", "hello")
+      val tree = Snapshot.currentTree(repo.dir)
+      assertEquals(tree, Right(created(Snapshot.create(repo.dir, "s1")).tree))
+
+  test("diffTrees: equal trees produce nothing at all"):
+    withRepo: repo =>
+      repo.write("a.txt", "hello")
+      repo.commit("init")
+      val tree = repo.git("rev-parse", "HEAD^{tree}")
+      assertEquals(Snapshot.diffTrees(repo.dir, tree, tree), Right(""))
+
+  test("diffTrees: a change produces a patch that keeps its trailing newline"):
+    withRepo: repo =>
+      repo.write("a.txt", "before\n")
+      repo.commit("init")
+      val baseline = repo.git("rev-parse", "HEAD^{tree}")
+      repo.write("a.txt", "after\n")
+      val target = Snapshot.currentTree(repo.dir) match
+        case Right(tree) => tree
+        case Left(error) => fail(s"expected a tree, got $error")
+      Snapshot.diffTrees(repo.dir, baseline, target) match
+        case Right(patch) =>
+          assert(patch.contains("diff --git a/a.txt b/a.txt"), clue(patch))
+          assert(patch.contains("-before"), clue(patch))
+          assert(patch.contains("+after"), clue(patch))
+          assert(patch.endsWith("\n"), clue(patch))
+        case other => fail(s"expected a patch, got $other")
+
+  test("diffTrees: an unresolvable tree comes back as the failed git command"):
+    withRepo: repo =>
+      repo.write("a.txt", "hello")
+      repo.commit("init")
+      val tree = repo.git("rev-parse", "HEAD^{tree}")
+      Snapshot.diffTrees(repo.dir, tree, "no-such-tree") match
+        case Left(GitError.CommandFailed(args, exitCode, stderr)) =>
+          assert(args.contains("diff"), clue(args))
           assertNotEquals(exitCode, 0)
           assert(stderr.nonEmpty, "git was supposed to explain itself")
         case other => fail(s"expected CommandFailed, got $other")

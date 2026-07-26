@@ -29,6 +29,7 @@ object Runner:
       case Command.SyncAbort  => report(Sync.abort(dir).map(number => s"aborted generation $number"))
       case Command.SyncList   => report(Sync.list(dir).map(renderList))
       case Command.SyncLog    => report(Sync.list(dir).flatMap(renderLog(dir, _)))
+      case Command.SyncDiff   => diff(dir)
 
   // -----------------------------------------------------------------------------------------
   // Rendering
@@ -77,6 +78,35 @@ object Runner:
     s"${snapshot.commit} tree ${snapshot.tree}"
 
   // -----------------------------------------------------------------------------------------
+  // diff
+  // -----------------------------------------------------------------------------------------
+
+  /** What has drifted since the last completed sync.
+    *
+    * The baseline is that generation's post snapshot, and an open generation is never a baseline:
+    * it has no recorded "after" state. Running this mid-sync therefore shows the human's edits
+    * together with whatever the sync has done so far, both measured from the last state the two
+    * sides agreed on — which is the view a reconciling engine needs.
+    */
+  private def diff(dir: String): Outcome =
+    Sync.lastCompleted(dir) match
+      case Left(error)                                    => failed(error)
+      case Right(Some(Generation(number, _, Some(post)))) => renderDiff(dir, number, post.tree)
+      case Right(_)                                       => failedWith("no completed generation to diff against")
+
+  private def renderDiff(dir: String, number: Int, baseline: String): Outcome =
+    val patch =
+      for
+        target <- fromGit(git.Snapshot.currentTree(dir))
+        text   <- fromGit(git.Snapshot.diffTrees(dir, baseline, target))
+      yield text
+    patch match
+      case Left(error) => failed(error)
+      case Right("")   => succeed(s"no changes since generation $number")
+      // git's own bytes, newline-terminated already: passed through rather than reformatted.
+      case Right(text) => Outcome(text, "", 0)
+
+  // -----------------------------------------------------------------------------------------
   // Failure
   // -----------------------------------------------------------------------------------------
 
@@ -105,13 +135,20 @@ object Runner:
 
   private def succeed(body: String): Outcome = Outcome(body + "\n", "", 0)
 
+  private def failedWith(text: String): Outcome = Outcome("", s"error: $text\n", 1)
+
+  private def failed(error: SyncError): Outcome = failedWith(message(error))
+
   private def report(result: Either[SyncError, String]): Outcome =
     result match
       case Right(body) => succeed(body)
-      case Left(error) => Outcome("", s"error: ${message(error)}\n", 1)
+      case Left(error) => failed(error)
+
+  private def fromGit[A](result: Either[git.GitError, A]): Either[SyncError, A] =
+    result.left.map(SyncError.Git.apply)
 
   private def committedAt(dir: String, commit: String): Either[SyncError, String] =
-    git.Snapshot.committedAt(dir, commit).left.map(SyncError.Git.apply)
+    fromGit(git.Snapshot.committedAt(dir, commit))
 
   private def traverse[A, B](items: List[A])(f: A => Either[SyncError, B]): Either[SyncError, List[B]] =
     @annotation.tailrec
