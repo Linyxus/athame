@@ -1,12 +1,17 @@
 package ame
 
-import optparse.{pure, sub}
+import optparse.{flag, opt, pure, sub}
 
 /** The command tree, as data.
   *
   * This file only describes the grammar; it never compiles it. `compile` is a macro that reads the
   * inferred shape type of what it is handed, so the tree lives here as a plain `val` and Main.scala
   * is the one place in the main sources that turns it into a parser.
+  *
+  * A parse produces `Command | ServeConfig`, which is what `|` types an alternation as. The union
+  * is not a wart: `serve` is not a one-shot command and must never reach [[Runner.execute]], whose
+  * whole contract — produce an [[Outcome]], print it, exit — is precisely what a server is not.
+  * Making it a [[Command]] case would put a server behind a function that promises to return.
   *
   * Two rules govern edits here, both learned the hard way and both invisible until violated:
   *
@@ -52,4 +57,11 @@ object Cli:
           "Show changes since the last completed generation",
           pure(Command.SyncDiff)
         )
+      ) | sub(
+        "serve",
+        "Serve athame's tools over MCP (stdio by default)",
+        (flag("http", "Serve over Streamable HTTP instead of stdio")
+          ~ opt[String]("host", "Bind address for --http (default 127.0.0.1)").optional
+          ~ opt[Int]("port", "Port for --http (default 3000)").optional)
+          .map { case ((http, host), port) => ServeConfig(http, host, port) }
       )

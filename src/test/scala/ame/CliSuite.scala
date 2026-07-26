@@ -6,17 +6,20 @@ import optparse.{ParseError, compile}
   * not turn into anything.
   *
   * These go through the compiled parser rather than the interpreter, so they also stand as the
-  * check that the tree in [[Cli]] survives macro compilation.
+  * check that the tree in [[Cli]] survives macro compilation — including the heterogeneous result
+  * union it acquired with `serve`, which the macro has to carry through untouched.
   */
 class CliSuite extends munit.FunSuite:
 
   private val parser = compile(Cli.cli)
 
-  private def parse(args: String*): Either[ParseError, Command] = parser.parse(args)
+  private def parse(args: String*): Either[ParseError, Command | ServeConfig] = parser.parse(args)
+
+  private val rootCommands = List("version", "sync", "serve")
 
   private val syncSubcommands = List("begin", "commit", "abort", "list", "log", "diff")
 
-  private def help(result: Either[ParseError, Command])(using munit.Location): String =
+  private def help(result: Either[ParseError, Command | ServeConfig])(using munit.Location): String =
     result match
       case Left(ParseError.HelpRequested(text)) => text
       case other                                => fail(s"expected help, got $other")
@@ -47,6 +50,34 @@ class CliSuite extends munit.FunSuite:
     assertEquals(parse("sync", "diff"), Right(Command.SyncDiff))
 
   // -------------------------------------------------------------------------------------------
+  // serve
+  //
+  // The one branch that does not produce a Command. Its options are recorded as written and judged
+  // later by ServeConfig.mode, so `--host` without `--http` parses here and fails there.
+  // -------------------------------------------------------------------------------------------
+
+  test("serve: bare serve is the stdio default"):
+    assertEquals(parse("serve"), Right(ServeConfig(false, None, None)))
+
+  test("serve: --http alone leaves the address and port to their defaults"):
+    assertEquals(parse("serve", "--http"), Right(ServeConfig(true, None, None)))
+
+  test("serve: --http with an address and a port carries both"):
+    assertEquals(
+      parse("serve", "--http", "--port", "9001", "--host", "0.0.0.0"),
+      Right(ServeConfig(true, Some("0.0.0.0"), Some(9001)))
+    )
+
+  test("serve: an address without --http is a parse, not a refusal"):
+    assertEquals(parse("serve", "--host", "0.0.0.0"), Right(ServeConfig(false, Some("0.0.0.0"), None)))
+
+  test("serve: a port that is not a number is refused where it is read"):
+    assertEquals(
+      parse("serve", "--http", "--port", "soon"),
+      Left(ParseError.InvalidValue("port", "soon", "expected an integer, got 'soon'"))
+    )
+
+  // -------------------------------------------------------------------------------------------
   // Missing and unknown subcommands
   // -------------------------------------------------------------------------------------------
 
@@ -58,7 +89,7 @@ class CliSuite extends munit.FunSuite:
   test("subcommands: an empty argv asks for one of the root commands"):
     assertEquals(
       parse(),
-      Left(ParseError.MissingSubcommand(List("version", "sync"), help(parse("--help"))))
+      Left(ParseError.MissingSubcommand(rootCommands, help(parse("--help"))))
     )
 
   test("subcommands: bare sync asks for one of its six, and shows sync's help"):
@@ -83,7 +114,7 @@ class CliSuite extends munit.FunSuite:
     assertEquals(
       parse("frobnicate"),
       Left(
-        ParseError.UnknownSubcommand("frobnicate", List("version", "sync"), help(parse("--help")))
+        ParseError.UnknownSubcommand("frobnicate", rootCommands, help(parse("--help")))
       )
     )
 
@@ -98,11 +129,11 @@ class CliSuite extends munit.FunSuite:
   // Help
   // -------------------------------------------------------------------------------------------
 
-  test("help: the root scope lists both commands"):
+  test("help: the root scope lists every command"):
     val text = help(parse("--help"))
-    assert(text.contains("version"), clue(text))
-    assert(text.contains("sync"), clue(text))
+    rootCommands.foreach(name => assert(text.contains(name), clue(text)))
     assert(text.contains("Manage sync generations"), clue(text))
+    assert(text.contains("Serve athame's tools over MCP (stdio by default)"), clue(text))
 
   test("help: the sync scope lists all five subcommands"):
     val text = help(parse("sync", "--help"))
@@ -127,6 +158,23 @@ class CliSuite extends munit.FunSuite:
     assert(text.contains("--help"), clue(text))
     assert(!text.contains("Commands"), clue(text))
     assertNotEquals(text, help(parse("sync", "--help")))
+
+  /** The one scope with options of its own, so the one whose help is worth pinning in full: this is
+    * how a user finds out that `--host` and `--port` exist at all.
+    */
+  test("help: serve documents its three options and their defaults"):
+    assertEquals(
+      help(parse("serve", "--help")),
+      """Usage: [options]
+        |
+        |Options:
+        |  --http  Serve over Streamable HTTP instead of stdio
+        |  --host  Bind address for --http (default 127.0.0.1)
+        |  --port  Port for --http (default 3000)
+        |  --help  Show this help and exit
+        |
+        |""".stripMargin
+    )
 
   test("help: version opted out, so --help there is an unknown option"):
     assertEquals(parse("version", "--help"), Left(ParseError.UnknownOption("--help")))

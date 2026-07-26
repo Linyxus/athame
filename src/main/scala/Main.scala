@@ -12,7 +12,11 @@ import optparse.*
   val argv = process.argv.asInstanceOf[js.Array[String]].toList.drop(2)
   val parser = compile(ame.Cli.cli)
   parser.parse(argv) match
-    case Right(command) =>
+    // `serve` parses to a configuration rather than a Command, and takes the other path entirely:
+    // it starts a server and returns to the event loop instead of producing output and an exit
+    // code. Everything below this line is the one-shot command line it has always been.
+    case Right(config: ame.ServeConfig) => ame.Serve.start(config)
+    case Right(command: ame.Command) =>
       // The runner already newline-terminates its lines, so write them through rather than
       // println, which would add a second one.
       val outcome = ame.Runner.execute(command, process.cwd().asInstanceOf[String])
