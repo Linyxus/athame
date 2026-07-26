@@ -122,7 +122,11 @@ final class Fields private[mcp] (val path: Path, private val record: js.Dynamic)
   *
   * Insertion order is the encoding contract: JavaScript objects iterate string keys in the order
   * they were added, `JSON.stringify` follows that iteration, and the golden tests pin the bytes.
-  * Absent optional fields are omitted rather than written as `null` — see [[Encode]].
+  *
+  * Absent optional fields are omitted rather than written as `null` — see [[Encode]] — with one
+  * documented exception, the `id` of an error response, where JSON-RPC 2.0 requires the null and
+  * [[Envelope.writeError]] writes it through [[set]] rather than [[putOpt]]. That exception is the
+  * reason [[set]] is reachable at all; every other field goes through the [[put]] family.
   */
 final class JsObj private[mcp] ():
   private val record: js.Dynamic = js.Dynamic.literal()
@@ -141,10 +145,11 @@ final class JsObj private[mcp] ():
 
   /** An optional arbitrary-JSON field, where `Some(Json.Null)` is an absence.
     *
-    * The only field in the package whose optional value can itself *be* `null` is an error's
+    * The only *field* in the package whose optional value can itself be `null` is an error's
     * `data`. Writing that out would produce a member that reads back as `None` — the leniency rule
-    * turns a `null` optional into an absence — so it is omitted instead, and the rule that encoders
-    * never emit `null` holds without exception.
+    * turns a `null` optional into an absence — so it is omitted instead. The one place a `null`
+    * really is written is an error response's `id`, where the null carries meaning JSON-RPC assigns
+    * it; see [[Envelope.writeError]].
     */
   def putJson(name: String, value: Option[Json]): JsObj =
     value match

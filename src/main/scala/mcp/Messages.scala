@@ -297,6 +297,24 @@ private object Envelope:
     out.put("jsonrpc", JsonRpc.Version, Encode.string)
     out.putOpt("id", id, RequestId.encoder)
 
+  /** The error envelope, whose absent id is written as an explicit `null` (ruling M12).
+    *
+    * This is the one place in the package where an encoder emits `null` rather than omitting the
+    * member, and it is deliberate. The schema types the field as `id?: RequestId`, but that is a
+    * loose TypeScript encoding of JSON-RPC 2.0 §5, whose normative text is not optional: an error
+    * response whose request could not be identified MUST carry `"id": null`. A peer correlating
+    * responses by id needs to be able to tell "this answers nothing" from "this member went
+    * missing", and only the explicit null says the first.
+    *
+    * Reading is unchanged and lenient in both directions: an absent id and a null id both decode to
+    * `None`, so this stays a round trip.
+    */
+  def writeError(out: JsObj, id: Option[RequestId]): Unit =
+    out.put("jsonrpc", JsonRpc.Version, Encode.string)
+    id match
+      case Some(known) => out.put("id", known, RequestId.encoder)
+      case None        => out.set("id", null)
+
 /** Anything a client can put on the wire.
   *
   * [[Response]] and [[Error]] are the client's answers to requests the *server* made, so a
@@ -336,7 +354,7 @@ object ClientMessage:
         Envelope.write(out, Some(id))
         out.put("result", result, Encode.jsonObj)
       case ClientMessage.Error(id, error) =>
-        Envelope.write(out, id)
+        Envelope.writeError(out, id)
         out.put("error", error, JsonRpc.Error.encoder)
 
 /** Anything a server can put on the wire. */
@@ -374,5 +392,5 @@ object ServerMessage:
         Envelope.write(out, Some(id))
         out.put("result", result, Encode.jsonObj)
       case ServerMessage.Error(id, error) =>
-        Envelope.write(out, id)
+        Envelope.writeError(out, id)
         out.put("error", error, JsonRpc.Error.encoder)

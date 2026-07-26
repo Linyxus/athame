@@ -324,13 +324,26 @@ class MessagesSuite extends McpSuite:
     assertEquals(Codec.decodeServerMessage(text), Right(message))
     assertEquals(Codec.encodeServerMessage(message), text)
 
-  test("error response: the id is optional here, as the schema has it"):
-    // Unlike a result response: a peer that could not parse the request has no id to echo.
-    val text = """{"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error"}}"""
+  test("error response: an id that could not be recovered is written as an explicit null"):
+    // Ruling M12, and the one place in the package where an encoder emits null rather than
+    // omitting: JSON-RPC 2.0 requires it, so that a peer correlating by id can tell "this answers
+    // nothing" from "this member went missing". Reading stays lenient — an absent id decodes to
+    // None too, which the next test pins.
+    val text = """{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"""
     val message =
       ServerMessage.Error(None, JsonRpc.Error(ErrorCode.ParseError, "Parse error", None))
     assertEquals(Codec.decodeServerMessage(text), Right(message))
     assertEquals(Codec.encodeServerMessage(message), text)
+
+  test("error response: an absent id still reads as no id, so both spellings round-trip"):
+    // The write side is pinned; the read side stays lenient in both directions, which is what keeps
+    // the encoder's choice a normalisation rather than a change of meaning.
+    val omitted = """{"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error"}}"""
+    val explicit = """{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"""
+    val message = ServerMessage.Error(None, JsonRpc.Error(ErrorCode.ParseError, "Parse error", None))
+    assertEquals(Codec.decodeServerMessage(omitted), Right(message))
+    assertEquals(Codec.decodeServerMessage(explicit), Right(message))
+    assertEquals(Codec.encodeServerMessage(message), explicit)
 
   test("error response: a broken error object is located inside it"):
     assertEquals(
