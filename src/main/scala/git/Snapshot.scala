@@ -113,6 +113,22 @@ object Snapshot:
       _      <- GitCmd.run(dir, Map.empty, "update-ref", "-d", ref, commit)
     yield ()
 
+  /** The tree a commit records.
+    *
+    * The tree OID is the identity of a working-tree state: two snapshots record the same content
+    * exactly when their trees are equal, which is a cheaper and more exact question than diffing
+    * them. Layers that track pairs of snapshots need to ask it, so it is public here.
+    *
+    * `commit` is anything git can resolve to a commit — a full OID, an abbreviation, `HEAD`, or a
+    * ref name such as `refs/ame/snapshots/<id>`. Anything else comes back as
+    * [[GitError.CommandFailed]] carrying git's own complaint about it.
+    */
+  def treeOf(dir: String, commit: String): Either[GitError, String] =
+    for
+      _    <- requireRepository(dir)
+      tree <- GitCmd.run(dir, Map.empty, "rev-parse", "--verify", s"$commit^{tree}")
+    yield tree
+
   // -----------------------------------------------------------------------------------------
   // Steps
   // -----------------------------------------------------------------------------------------
