@@ -64,9 +64,12 @@ class SnapshotSuite extends munit.FunSuite:
         assert(reason.nonEmpty, "InvalidId should explain itself")
       case other => fail(s"expected InvalidId('$id'), got $other")
 
-  /** Names of leftover temp indexes in the OS temp directory. */
+  /** Names of leftover temp indexes in the OS temp directory that THIS process created. The name
+    * embeds the creating pid, and filtering on it matters: sbt runs suites in concurrent Node
+    * processes, so another suite's mid-`create` index is visible here and is not a leak.
+    */
   private def tempIndexes(): Set[String] =
-    TestFs.readdirSync(TestOs.tmpdir()).toSet.filter(_.startsWith("ame-index-"))
+    TestFs.readdirSync(TestOs.tmpdir()).toSet.filter(_.startsWith(s"ame-index-${NodeProcess.pid}-"))
 
   /** Runs `body` with git's global and system config pointed at nothing, so the only identity git
     * can possibly see is the one the snapshot code hands it.

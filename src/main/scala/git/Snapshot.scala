@@ -73,13 +73,20 @@ object Snapshot:
       ref      <- refFor(dir, id)
       _        <- requireAbsent(dir, ref, id, force)
       parent    = headCommit(dir)
-      headTree  = parent.flatMap(commit => treeOf(dir, commit))
+      headTree  = parent.flatMap(commit => revParse(dir, s"$commit^{tree}"))
       tree     <- writeSnapshotTree(dir, parent)
       commit   <- commitTree(dir, tree, parent, id)
       // Without force, the empty old-value makes update-ref itself assert "must not exist yet":
       // requireAbsent gave the friendly error, this closes the race between the check and the write.
+      // A loser of that race still reports SnapshotExists — decided by re-probing the ref, not by
+      // parsing git's (locale-dependent) stderr.
       _        <- if force then GitCmd.run(dir, Map.empty, "update-ref", ref, commit)
-                  else GitCmd.run(dir, Map.empty, "update-ref", ref, commit, "")
+                  else
+                    GitCmd.run(dir, Map.empty, "update-ref", ref, commit, "") match
+                      case Right(output) => Right(output)
+                      case Left(failed) =>
+                        if refCommit(dir, ref).isDefined then Left(GitError.SnapshotExists(id))
+                        else Left(failed)
     yield SnapshotCreated(id, ref, commit, tree, parent, headTree.contains(tree))
 
   /** Every snapshot in the repository containing `dir`, sorted by id. */
@@ -146,9 +153,6 @@ object Snapshot:
     * snapshot. A detached HEAD is not special: it resolves to the detached commit.
     */
   private def headCommit(dir: String): Option[String] = revParse(dir, "HEAD")
-
-  private def treeOf(dir: String, commit: String): Option[String] =
-    revParse(dir, s"$commit^{tree}")
 
   private def refCommit(dir: String, ref: String): Option[String] = revParse(dir, ref)
 
