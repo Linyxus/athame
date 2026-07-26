@@ -129,6 +129,22 @@ object Snapshot:
       tree <- GitCmd.run(dir, Map.empty, "rev-parse", "--verify", s"$commit^{tree}")
     yield tree
 
+  /** When a commit was committed, as a strict ISO-8601 timestamp such as
+    * `2026-07-26T10:11:06+02:00`.
+    *
+    * This is the committer date (`%cI`), not the author date: for a snapshot the two are set
+    * together, and the committer date is the one that means "when this was recorded". It carries
+    * the offset of the machine that made the commit rather than being normalized to UTC, which is
+    * what a human reading their own history expects to see.
+    *
+    * `commit` is anything git can resolve, as in [[treeOf]].
+    */
+  def committedAt(dir: String, commit: String): Either[GitError, String] =
+    for
+      _    <- requireRepository(dir)
+      date <- GitCmd.run(dir, Map.empty, "show", "-s", "--format=%cI", commit)
+    yield date
+
   // -----------------------------------------------------------------------------------------
   // Steps
   // -----------------------------------------------------------------------------------------

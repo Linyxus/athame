@@ -68,6 +68,37 @@ class TreeOfSuite extends munit.FunSuite:
           assert(stderr.nonEmpty, "git was supposed to explain itself")
         case other => fail(s"expected CommandFailed, got $other")
 
+  test("committedAt: a commit reports its committer date as ISO-8601"):
+    withRepo: repo =>
+      repo.write("a.txt", "hello")
+      val head = repo.commit("init")
+      Snapshot.committedAt(repo.dir, head) match
+        case Right(date) =>
+          assert(date.matches("""\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.*"""), clue(date))
+          assertEquals(date, repo.git("show", "-s", "--format=%cI", head))
+        case other => fail(s"expected a timestamp, got $other")
+
+  test("committedAt: a snapshot's ref name works as well as its commit"):
+    withRepo: repo =>
+      repo.write("a.txt", "hello")
+      repo.commit("init")
+      val snapshot = created(Snapshot.create(repo.dir, "s1"))
+      assertEquals(
+        Snapshot.committedAt(repo.dir, snapshot.ref),
+        Snapshot.committedAt(repo.dir, snapshot.commit)
+      )
+
+  test("committedAt: an unresolvable revision comes back as the failed git command"):
+    withRepo: repo =>
+      repo.write("a.txt", "hello")
+      repo.commit("init")
+      Snapshot.committedAt(repo.dir, "no-such-revision") match
+        case Left(GitError.CommandFailed(args, exitCode, stderr)) =>
+          assert(args.contains("show"), clue(args))
+          assertNotEquals(exitCode, 0)
+          assert(stderr.nonEmpty, "git was supposed to explain itself")
+        case other => fail(s"expected CommandFailed, got $other")
+
   test("treeOf: a directory outside a repository is not a repository"):
     val dir = TestFs.mkdtempSync(TestPath.join(TestOs.tmpdir(), "ame-plain-"))
     val options = scala.scalajs.js.Dictionary.empty[scala.scalajs.js.Any]
