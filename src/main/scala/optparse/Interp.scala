@@ -101,12 +101,20 @@ object Interp:
     wrap: ErasedMap
   )
 
-  private final class SubgroupSlot(val rawEntries: List[RawSubEntry]):
+  /** `renderScopeHelp` is the help of the scope that *owns* this group, which the slot itself has no
+    * way to reach — [[prepareScope]] installs it. It stays a thunk because A10.3 wants the text
+    * built only when the error is actually raised.
+    */
+  private final class SubgroupSlot(
+    val rawEntries: List[RawSubEntry],
+    renderScopeHelp: () => String
+  ):
     private var parsed: Option[Either[ParseError, Any]] = None
     private var preparedEntries: List[SubEntry] = Nil
 
     def expectedNames: List[String] = rawEntries.map(_.name)
     def entries: List[SubEntry] = preparedEntries
+    def scopeHelp: String = renderScopeHelp()
 
     def prepareEntries(): Unit =
       preparedEntries = rawEntries.map { entry =>
@@ -116,9 +124,12 @@ object Interp:
     def select(result: Either[ParseError, Any]): Unit = parsed = Some(result)
 
     def result: Either[ParseError, Any] =
-      parsed.getOrElse(Left(ParseError.MissingSubcommand(expectedNames)))
+      parsed.getOrElse(Left(ParseError.MissingSubcommand(expectedNames, scopeHelp)))
 
-  private final class Scope:
+  /** `renderHelp` is this scope's own rendering, as a thunk: the subcommand errors raised here carry
+    * it (A10.1) and nothing else needs it, so nothing should pay for building it (A10.3).
+    */
+  private final class Scope(val renderHelp: () => String):
     val options = ListBuffer.empty[OptionSlot]
     val positionals = ListBuffer.empty[PositionalSlot]
     val subgroups = ListBuffer.empty[SubgroupSlot]
@@ -202,7 +213,9 @@ object Interp:
     parseScope(program, args).map(_.asInstanceOf[R])
 
   private def prepareScope(root: Cli[?, ?], helpEnabled: Boolean): Program =
-    val scope = new Scope
+    // A10.2: an opted-out scope renders its help without the `--help` row it does not answer to,
+    // which is exactly what its own `helpEnabled` says.
+    val scope = new Scope(() => Help.render(root, helpEnabled))
     val builder = build(root, scope)
     scope.validateLocalStructure()
     scope.subgroups.foreach(_.prepareEntries())
@@ -284,7 +297,7 @@ object Interp:
       seenNames += entry.name
     }
 
-    val slot = new SubgroupSlot(entries)
+    val slot = new SubgroupSlot(entries, scope.renderHelp)
     scope.subgroups += slot
     () => slot.result
 
@@ -352,7 +365,11 @@ object Interp:
           case Some(group) =>
             group.entries.find(_.name == token) match
               case None =>
-                return Left(ParseError.UnknownSubcommand(token, group.expectedNames))
+                // A10.1: the same scope help the missing-subcommand branch carries, rendered here
+                // and only here so that a successful dispatch never builds it.
+                return Left(
+                  ParseError.UnknownSubcommand(token, group.expectedNames, group.scopeHelp)
+                )
               case Some(entry) =>
                 val innerResult = parseScope(entry.program, args.drop(i + 1)).map(entry.wrap)
                 group.select(innerResult)

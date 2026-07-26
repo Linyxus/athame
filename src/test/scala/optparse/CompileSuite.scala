@@ -43,6 +43,23 @@ class CompileSuite extends munit.FunSuite:
   private def p[R](parser: Parser[R], args: String*): Either[ParseError, R] =
     parser.parse(args)
 
+  /** As in [[InterpSuite]]: unpack the two help-carrying subcommand errors (A10.1) where the test is
+    * about dispatch, and pin the exact rendering in the A10 section only.
+    */
+  private def missingSub[R](parser: Parser[R], args: String*)(using
+    munit.Location
+  ): (List[String], String) =
+    p(parser, args*) match
+      case Left(ParseError.MissingSubcommand(expected, help)) => (expected, help)
+      case other => fail(s"expected MissingSubcommand, got $other")
+
+  private def unknownSub[R](parser: Parser[R], args: String*)(using
+    munit.Location
+  ): (String, List[String], String) =
+    p(parser, args*) match
+      case Left(ParseError.UnknownSubcommand(value, expected, help)) => (value, expected, help)
+      case other => fail(s"expected UnknownSubcommand, got $other")
+
   // -------------------------------------------------------------------------------------------
   // Flags
   // -------------------------------------------------------------------------------------------
@@ -297,30 +314,30 @@ class CompileSuite extends munit.FunSuite:
     assertEquals(p(C.git, "clone", "repo", "-v"), Left(ParseError.UnknownOption("-v")))
 
   test("sub: unknown subcommand lists the expected names"):
-    assertEquals(p(C.git, "push"), Left(ParseError.UnknownSubcommand("push", List("clone", "remote"))))
+    val (value, expected, _) = unknownSub(C.git, "push")
+    assertEquals(value, "push")
+    assertEquals(expected, List("clone", "remote"))
 
   test("sub: unknown nested subcommand"):
-    assertEquals(
-      p(C.git, "remote", "frob"),
-      Left(ParseError.UnknownSubcommand("frob", List("add", "remove", "list")))
-    )
+    val (value, expected, _) = unknownSub(C.git, "remote", "frob")
+    assertEquals(value, "frob")
+    assertEquals(expected, List("add", "remove", "list"))
 
   test("sub: missing subcommand at the root"):
-    assertEquals(p(C.git, "-v"), Left(ParseError.MissingSubcommand(List("clone", "remote"))))
+    assertEquals(missingSub(C.git, "-v")._1, List("clone", "remote"))
 
   test("sub: missing nested subcommand"):
-    assertEquals(
-      p(C.git, "remote"),
-      Left(ParseError.MissingSubcommand(List("add", "remove", "list")))
-    )
+    assertEquals(missingSub(C.git, "remote")._1, List("add", "remove", "list"))
 
   test("sub: a lone Sub is a group of one"):
     assertEquals(p(C.gitClone, "clone", "repo"), Right(Clone("repo", None, false)))
-    assertEquals(p(C.gitClone, "fetch"), Left(ParseError.UnknownSubcommand("fetch", List("clone"))))
+    val (value, expected, _) = unknownSub(C.gitClone, "fetch")
+    assertEquals(value, "fetch")
+    assertEquals(expected, List("clone"))
 
   test("sub: a nested group parses standalone"):
     assertEquals(p(C.gitRemote, "remote", "add", "o", "u"), Right(RemoteAdd("o", "u")))
-    assertEquals(p(C.gitRemote, "remote"), Left(ParseError.MissingSubcommand(List("add", "remove", "list"))))
+    assertEquals(missingSub(C.gitRemote, "remote")._1, List("add", "remove", "list"))
 
   test("sub: union result types choose per branch"):
     assertEquals(p(C.unionResult, "count", "-n", "5"), Right(5))
@@ -340,7 +357,7 @@ class CompileSuite extends munit.FunSuite:
     assertEquals(p(parser, "a", "-n", "3"), Right("[a3]"))
     assertEquals(p(parser, "b", "x"), Right("[bx1]"))
     assertEquals(p(parser, "b", "y"), Right("[b2]"))
-    assertEquals(p(parser, "b"), Left(ParseError.MissingSubcommand(List("x", "y"))))
+    assertEquals(missingSub(parser, "b")._1, List("x", "y"))
 
   // -------------------------------------------------------------------------------------------
   // Docker-like: repeated options plus repeated trailing positionals
@@ -379,7 +396,9 @@ class CompileSuite extends munit.FunSuite:
   test("precedence: unknown subcommand wins over outer missing options"):
     val cli = opt[Int]("n", "d") ~ (sub("a", "d", pure(1)) | sub("b", "d", pure(2)))
     val parser = compile(cli)
-    assertEquals(p(parser, "bogus"), Left(ParseError.UnknownSubcommand("bogus", List("a", "b"))))
+    val (value, expected, _) = unknownSub(parser, "bogus")
+    assertEquals(value, "bogus")
+    assertEquals(expected, List("a", "b"))
 
   test("precedence (A7): missing-checks run in declaration order"):
     val cli = opt[Int]("n", "d") ~ (sub("a", "d", pure(1)) | sub("b", "d", pure(2)))
@@ -572,6 +591,54 @@ class CompileSuite extends munit.FunSuite:
     val text = C.helpOptOut.help
     assert(text.contains("version  Print the version number"), text)
     assert(text.contains("build    Compile a target"), text)
+
+  // -------------------------------------------------------------------------------------------
+  // Scoped error help (A10.1-A10.2), mirroring InterpSuite — same scopes, same bytes
+  // -------------------------------------------------------------------------------------------
+
+  test("help (A10.1): a missing subcommand at the root carries the root scope's help"):
+    val (expected, text) = missingSub(C.git, "-v")
+    assertEquals(expected, List("clone", "remote"))
+    assertEquals(text, gitRootHelp)
+    assertEquals(text, helpOf(C.git, "--help"))
+
+  test("help (A10.1): a missing nested subcommand carries the nested scope's help"):
+    val (expected, text) = missingSub(C.git, "remote")
+    assertEquals(expected, List("add", "remove", "list"))
+    assertEquals(text, gitRemoteHelp)
+    assertEquals(text, helpOf(C.git, "remote", "--help"))
+    // The generated code reaches for a scope by constant index; this is what catches it reaching
+    // for the enclosing one.
+    assertNotEquals(text, gitRootHelp)
+
+  test("help (A10.1): an unknown root command carries the root scope's help"):
+    val (value, expected, text) = unknownSub(C.git, "push")
+    assertEquals(value, "push")
+    assertEquals(expected, List("clone", "remote"))
+    assertEquals(text, gitRootHelp)
+    assertEquals(text, helpOf(C.git, "--help"))
+
+  test("help (A10.1): an unknown nested command carries the nested scope's help"):
+    val (value, expected, text) = unknownSub(C.git, "remote", "frob")
+    assertEquals(value, "frob")
+    assertEquals(expected, List("add", "remove", "list"))
+    assertEquals(text, gitRemoteHelp)
+    assertEquals(text, helpOf(C.git, "remote", "--help"))
+
+  test("help (A10.2): a help-disabled scope carries help without the automatic row"):
+    val (expected, text) = missingSub(C.nestedHelpOptOut, "outer")
+    assertEquals(expected, List("inner", "mute"))
+    assertEquals(text, nestedSilentGroupHelp)
+    // A9.2 gives this scope no help branch at all, so the rendering can only have come from the
+    // A10.2 context-help site, and it must have passed `includeHelpRow = false`.
+    assert(!text.contains("Show this help and exit"), text)
+    assert(!text.contains("Options:"), text)
+
+  test("help (A10.2): the same silent scope's unknown-command error carries the same help"):
+    val (value, expected, text) = unknownSub(C.nestedHelpOptOut, "outer", "frob")
+    assertEquals(value, "frob")
+    assertEquals(expected, List("inner", "mute"))
+    assertEquals(text, nestedSilentGroupHelp)
 
   test("help (A9.5): the subscope table still numbers help-disabled scopes"):
     // `outer` opts out but still occupies a slot in `Subscopes.collect`, so its help-enabled child

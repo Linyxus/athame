@@ -50,23 +50,49 @@ class CliSuite extends munit.FunSuite:
   // Missing and unknown subcommands
   // -------------------------------------------------------------------------------------------
 
+  /** The motivating bug (A10.1): `ame sync` used to answer with the root help, which lists `version`
+    * and `sync` — everything except the six commands the user was actually being asked for. Each of
+    * these pins the carried help against the `--help` text of the scope that raised the error, which
+    * is the property that makes the answer useful.
+    */
   test("subcommands: an empty argv asks for one of the root commands"):
-    assertEquals(parse(), Left(ParseError.MissingSubcommand(List("version", "sync"))))
+    assertEquals(
+      parse(),
+      Left(ParseError.MissingSubcommand(List("version", "sync"), help(parse("--help"))))
+    )
 
-  test("subcommands: bare sync asks for one of its six"):
-    assertEquals(parse("sync"), Left(ParseError.MissingSubcommand(syncSubcommands)))
+  test("subcommands: bare sync asks for one of its six, and shows sync's help"):
+    assertEquals(
+      parse("sync"),
+      Left(ParseError.MissingSubcommand(syncSubcommands, help(parse("sync", "--help"))))
+    )
 
   test("subcommands: an unknown sync subcommand lists the ones that exist"):
     assertEquals(
       parse("sync", "frobnicate"),
-      Left(ParseError.UnknownSubcommand("frobnicate", syncSubcommands))
+      Left(
+        ParseError.UnknownSubcommand(
+          "frobnicate",
+          syncSubcommands,
+          help(parse("sync", "--help"))
+        )
+      )
     )
 
   test("subcommands: an unknown root command lists the ones that exist"):
     assertEquals(
       parse("frobnicate"),
-      Left(ParseError.UnknownSubcommand("frobnicate", List("version", "sync")))
+      Left(
+        ParseError.UnknownSubcommand("frobnicate", List("version", "sync"), help(parse("--help")))
+      )
     )
+
+  test("subcommands: sync's error help is sync's, not the root's"):
+    // The regression this whole ruling exists for: the two must not be the same text.
+    val syncHelp = help(parse("sync", "--help"))
+    assertNotEquals(syncHelp, help(parse("--help")))
+    assert(syncHelp.contains("Begin a new generation (records the pre-sync snapshot)"), syncHelp)
+    assert(!syncHelp.contains("Print the version number"), syncHelp)
 
   // -------------------------------------------------------------------------------------------
   // Help

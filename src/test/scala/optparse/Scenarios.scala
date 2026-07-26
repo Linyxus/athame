@@ -211,3 +211,54 @@ object Scenarios:
 
   val nestedHelpOptOut =
     sub("outer", "A scope that does not answer --help", nestedHelpGroup, help = false)
+
+  // -------------------------------------------------------------------------------------------
+  // Golden scope renderings (A10)
+  //
+  // The exact text the subcommand errors must carry, written out rather than computed with
+  // `Help.render`: a backend that reaches for the wrong scope would satisfy a computed expectation
+  // by construction, and these literals are the whole point of the ruling. Both the interpreter
+  // suite and the macro suite pin the same bytes.
+  // -------------------------------------------------------------------------------------------
+
+  /** [[git]]'s root scope: the global flag, plus its two commands. */
+  val gitRootHelp =
+    """Usage: [options] <command>
+      |
+      |Options:
+      |  --verbose, -v  Print more output
+      |  --help         Show this help and exit
+      |
+      |
+      |Commands:
+      |  clone   Clone a repository into a new directory
+      |  remote  Manage the set of tracked repositories
+      |
+      |""".stripMargin
+
+  /** The scope inside `git remote`: three commands and no options of its own. */
+  val gitRemoteHelp =
+    """Usage: [options] <command>
+      |
+      |Options:
+      |  --help  Show this help and exit
+      |
+      |
+      |Commands:
+      |  add     Add a remote named <name>
+      |  remove  Remove the remote named <name>
+      |  list    List every remote
+      |
+      |""".stripMargin
+
+  /** The scope inside [[nestedHelpOptOut]]'s `outer`, which has opted out of `--help` (A10.2): the
+    * automatic row is gone, and with no options left there is no Options section at all.
+    */
+  val nestedSilentGroupHelp =
+    """Usage: [options] <command>
+      |
+      |Commands:
+      |  inner  A scope that answers --help
+      |  mute   A scope that does not
+      |
+      |""".stripMargin

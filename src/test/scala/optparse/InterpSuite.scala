@@ -10,6 +10,24 @@ class InterpSuite extends munit.FunSuite:
   private def p[R](cli: Cli[?, R], args: String*): Either[ParseError, R] =
     Interp.parse(cli, args)
 
+  /** The two subcommand errors carry the help of the scope that raised them (A10.1). Tests that are
+    * about dispatch rather than about the help unpack the error instead of pinning a whole
+    * rendering; the A10 section below is where the exact text is nailed down.
+    */
+  private def missingSub[R](cli: Cli[?, R], args: String*)(using
+    munit.Location
+  ): (List[String], String) =
+    p(cli, args*) match
+      case Left(ParseError.MissingSubcommand(expected, help)) => (expected, help)
+      case other => fail(s"expected MissingSubcommand, got $other")
+
+  private def unknownSub[R](cli: Cli[?, R], args: String*)(using
+    munit.Location
+  ): (String, List[String], String) =
+    p(cli, args*) match
+      case Left(ParseError.UnknownSubcommand(value, expected, help)) => (value, expected, help)
+      case other => fail(s"expected UnknownSubcommand, got $other")
+
   // -------------------------------------------------------------------------------------------
   // Flags
   // -------------------------------------------------------------------------------------------
@@ -256,22 +274,20 @@ class InterpSuite extends munit.FunSuite:
     assertEquals(p(git, "clone", "repo", "-v"), Left(ParseError.UnknownOption("-v")))
 
   test("sub: unknown subcommand lists the expected names"):
-    assertEquals(
-      p(git, "push"),
-      Left(ParseError.UnknownSubcommand("push", List("clone", "remote")))
-    )
+    val (value, expected, _) = unknownSub(git, "push")
+    assertEquals(value, "push")
+    assertEquals(expected, List("clone", "remote"))
 
   test("sub: unknown nested subcommand"):
-    assertEquals(
-      p(git, "remote", "frob"),
-      Left(ParseError.UnknownSubcommand("frob", List("add", "remove", "list")))
-    )
+    val (value, expected, _) = unknownSub(git, "remote", "frob")
+    assertEquals(value, "frob")
+    assertEquals(expected, List("add", "remove", "list"))
 
   test("sub: missing subcommand at the root"):
-    assertEquals(p(git, "-v"), Left(ParseError.MissingSubcommand(List("clone", "remote"))))
+    assertEquals(missingSub(git, "-v")._1, List("clone", "remote"))
 
   test("sub: missing nested subcommand"):
-    assertEquals(p(git, "remote"), Left(ParseError.MissingSubcommand(List("add", "remove", "list"))))
+    assertEquals(missingSub(git, "remote")._1, List("add", "remove", "list"))
 
   test("sub: union result types choose per branch"):
     assertEquals(p(unionResult, "count", "-n", "5"), Right(5))
@@ -308,7 +324,9 @@ class InterpSuite extends munit.FunSuite:
 
   test("precedence: unknown subcommand wins over outer missing options"):
     val cli = opt[Int]("n", "d") ~ (sub("a", "d", pure(1)) | sub("b", "d", pure(2)))
-    assertEquals(p(cli, "bogus"), Left(ParseError.UnknownSubcommand("bogus", List("a", "b"))))
+    val (value, expected, _) = unknownSub(cli, "bogus")
+    assertEquals(value, "bogus")
+    assertEquals(expected, List("a", "b"))
 
   test("precedence (A7): missing-checks run in declaration order"):
     // required opt is declared before the subcommand group, so it reports first
@@ -444,6 +462,56 @@ class InterpSuite extends munit.FunSuite:
     val text = Help.render(twoRequiredPositionals, includeHelpRow = false)
     assert(!text.contains("Options:"), text)
     assert(text.contains("<source>"), text)
+
+  // -------------------------------------------------------------------------------------------
+  // Scoped error help (A10.1-A10.2)
+  // -------------------------------------------------------------------------------------------
+
+  test("help (A10.1): a missing subcommand at the root carries the root scope's help"):
+    val (expected, text) = missingSub(git, "-v")
+    assertEquals(expected, List("clone", "remote"))
+    assertEquals(text, gitRootHelp)
+    // The A10.1 cross-check: the same bytes `--help` would have produced in this scope.
+    assertEquals(text, helpOf(git, "--help"))
+
+  test("help (A10.1): a missing nested subcommand carries the nested scope's help"):
+    val (expected, text) = missingSub(git, "remote")
+    assertEquals(expected, List("add", "remove", "list"))
+    assertEquals(text, gitRemoteHelp)
+    assertEquals(text, helpOf(git, "remote", "--help"))
+    // The bug this ruling exists for: answering with the root help would be answering the wrong
+    // question.
+    assertNotEquals(text, gitRootHelp)
+
+  test("help (A10.1): an unknown root command carries the root scope's help"):
+    val (value, expected, text) = unknownSub(git, "push")
+    assertEquals(value, "push")
+    assertEquals(expected, List("clone", "remote"))
+    assertEquals(text, gitRootHelp)
+    assertEquals(text, helpOf(git, "--help"))
+
+  test("help (A10.1): an unknown nested command carries the nested scope's help"):
+    val (value, expected, text) = unknownSub(git, "remote", "frob")
+    assertEquals(value, "frob")
+    assertEquals(expected, List("add", "remove", "list"))
+    assertEquals(text, gitRemoteHelp)
+    assertEquals(text, helpOf(git, "remote", "--help"))
+
+  test("help (A10.2): a help-disabled scope carries help without the automatic row"):
+    val (expected, text) = missingSub(nestedHelpOptOut, "outer")
+    assertEquals(expected, List("inner", "mute"))
+    assertEquals(text, nestedSilentGroupHelp)
+    // Not `!text.contains("--help")`: `inner`'s own description mentions it. What must be absent is
+    // the row advertising an option this scope would refuse — and with no other options, the whole
+    // Options section with it.
+    assert(!text.contains("Show this help and exit"), text)
+    assert(!text.contains("Options:"), text)
+
+  test("help (A10.2): the same silent scope's unknown-command error carries the same help"):
+    val (value, expected, text) = unknownSub(nestedHelpOptOut, "outer", "frob")
+    assertEquals(value, "frob")
+    assertEquals(expected, List("inner", "mute"))
+    assertEquals(text, nestedSilentGroupHelp)
 
   // -------------------------------------------------------------------------------------------
   // Structural rules R1-R6 (IllegalArgumentException, eager, argv-independent per A5)

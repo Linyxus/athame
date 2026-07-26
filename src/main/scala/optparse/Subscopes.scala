@@ -19,8 +19,9 @@ import scala.collection.mutable.ArrayBuffer
   * order, different payload — so keep the two walks side by side and change them together.
   *
   * A9.5: every `Sub` inner is collected, including scopes that have opted out of `--help`. Making
-  * the walk help-dependent would make the indices depend on the grammar's help flags; an opted-out
-  * scope's entry is simply never read.
+  * the walk help-dependent would make the indices depend on the grammar's help flags. An opted-out
+  * scope's entry is read too, just never for a `--help` token: its subcommand errors carry its help
+  * as error context (A10.2), rendered without the row advertising the option it refuses.
   */
 object Subscopes:
 

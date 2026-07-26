@@ -22,7 +22,11 @@ import optparse.*
     // `--help` is a successful run that happens to arrive as a Left: print the scope's own help
     // and leave the exit code at 0.
     case Left(ParseError.HelpRequested(text)) => println(text)
+    // A usage error is a failure, so it goes to stderr like any other (A10.5), and it is answered
+    // with the help of the scope that raised it where the error knows one: `ame sync` is a question
+    // about sync, not about ame. Help.render already ends in a newline; the second one restores the
+    // blank line the old println pair left behind.
     case Left(error) =>
-      println(s"error: $error")
-      println(parser.help)
+      process.stderr.write(s"error: ${error.message}\n")
+      process.stderr.write(error.contextHelp.getOrElse(parser.help) + "\n")
       process.exitCode = 1

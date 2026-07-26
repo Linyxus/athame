@@ -183,8 +183,11 @@ object CompileMacro:
     /** A subcommand with `H = true` reads `Subscopes.collect`'s table by constant index (A8.6). */
     case Enabled(scopeIdx: Int)
 
-    /** A subcommand with `H = false`: the generated scanner has no help branch at all (A9.2). */
-    case Disabled
+    /** A subcommand with `H = false`: the generated scanner has no help branch at all (A9.2). The
+      * table index is kept all the same, because the scope's subcommand errors still carry its help
+      * (A10.2) even though `--help` will never ask for it.
+      */
+    case Disabled(scopeIdx: Int)
 
   private final case class Scope(
     slotCount: Int,
@@ -445,7 +448,8 @@ object CompileMacro:
 
       val entries = groups.headOption.map(_.map { raw =>
         val innerHelp =
-          if raw.helpEnabled then HelpMode.Enabled(raw.scopeIdx) else HelpMode.Disabled
+          if raw.helpEnabled then HelpMode.Enabled(raw.scopeIdx)
+          else HelpMode.Disabled(raw.scopeIdx)
         SubEntry(raw.name, raw.wraps, analyze(raw.inner, innerHelp))
       })
 
@@ -518,7 +522,18 @@ object CompileMacro:
         scope.help match
           case HelpMode.Root           => Some('{ Help.render($rootCli, true) })
           case HelpMode.Enabled(index) => Some('{ Help.render(${ subscopes }(${ Expr(index) }), true) })
-          case HelpMode.Disabled       => None
+          case HelpMode.Disabled(_)    => None
+
+      /** The scope help carried by this scope's subcommand errors (A10.1). Unlike [[render]] this
+        * is total: an opted-out scope has help to show, it just must not advertise the `--help` it
+        * would refuse (A10.2). Splice it only into failure branches, so a parse that dispatches
+        * cleanly never renders anything (A10.3).
+        */
+      def contextHelp(scope: Scope): Expr[String] =
+        scope.help match
+          case HelpMode.Root            => '{ Help.render($rootCli, true) }
+          case HelpMode.Enabled(index)  => '{ Help.render(${ subscopes }(${ Expr(index) }), true) }
+          case HelpMode.Disabled(index) => '{ Help.render(${ subscopes }(${ Expr(index) }), false) }
 
     private def scopeExpr(
       scope: Scope,
@@ -539,7 +554,7 @@ object CompileMacro:
           else st.fail(ParseError.UnknownOption(token))
 
         if st.failed then Left[ParseError, Any](st.failure)
-        else ${ resultExpr(scope.result, 'st, payloads) }
+        else ${ resultExpr(scope.result, 'st, payloads, help.contextHelp(scope)) }
       }
 
     private def positionalOrDispatch(
@@ -550,20 +565,25 @@ object CompileMacro:
       help: HelpSources
     ): Expr[Unit] =
       scope.subs match
-        case Some(entries) => dispatchExpr(entries, entries.map(_.name), st, token, payloads, help)
-        case None          => positionalExpr(scope.positionals, 0, st, token, payloads)
+        case Some(entries) =>
+          dispatchExpr(entries, entries.map(_.name), st, token, payloads, help, help.contextHelp(scope))
+        case None => positionalExpr(scope.positionals, 0, st, token, payloads)
 
+    /** `contextHelp` belongs to the dispatching scope, not to the branch being tried, so it is
+      * passed down the chain untouched and spliced once, where the chain runs out (A10.1).
+      */
     private def dispatchExpr(
       remaining: List[SubEntry],
       expected: List[String],
       st: Expr[Scan],
       token: Expr[String],
       payloads: Expr[IArray[Any]],
-      help: HelpSources
+      help: HelpSources,
+      contextHelp: Expr[String]
     ): Expr[Unit] =
       remaining match
         case Nil =>
-          '{ $st.fail(ParseError.UnknownSubcommand($token, ${ Expr(expected) })) }
+          '{ $st.fail(ParseError.UnknownSubcommand($token, ${ Expr(expected) }, $contextHelp)) }
         case entry :: rest =>
           '{
             if $token == ${ Expr(entry.name) } then
@@ -575,7 +595,7 @@ object CompileMacro:
                   payloads
                 )
               })
-            else ${ dispatchExpr(rest, expected, st, token, payloads, help) }
+            else ${ dispatchExpr(rest, expected, st, token, payloads, help, contextHelp) }
           }
 
     /** Branch-local maps applied to a subcommand's result, innermost first. */
@@ -805,10 +825,14 @@ object CompileMacro:
         '{ ParserRuntime.transform($payloads(${ Expr(index) }), $acc) }
       }
 
+    /** `contextHelp` is this scope's own help (A10.1). Only [[Build.SubResult]] splices it, but the
+      * group can sit anywhere in the result tree, so it rides along the whole recursion.
+      */
     private def resultExpr(
       build: Build,
       st: Expr[Scan],
-      payloads: Expr[IArray[Any]]
+      payloads: Expr[IArray[Any]],
+      contextHelp: Expr[String]
     ): Expr[Either[ParseError, Any]] =
       build match
         case Build.FlagResult(slot) =>
@@ -834,14 +858,14 @@ object CompileMacro:
 
         case Build.Pair(left, right) =>
           '{
-            ${ resultExpr(left, st, payloads) }.flatMap { first =>
-              ${ resultExpr(right, st, payloads) }.map(second => (first, second))
+            ${ resultExpr(left, st, payloads, contextHelp) }.flatMap { first =>
+              ${ resultExpr(right, st, payloads, contextHelp) }.map(second => (first, second))
             }
           }
 
         case Build.Mapped(inner, fIdx) =>
           '{
-            ${ resultExpr(inner, st, payloads) }.map(value =>
+            ${ resultExpr(inner, st, payloads, contextHelp) }.map(value =>
               ParserRuntime.transform($payloads(${ Expr(fIdx) }), value)
             )
           }
@@ -852,5 +876,8 @@ object CompileMacro:
         case Build.SubResult(expected) =>
           '{
             if $st.hasSub then $st.sub
-            else Left[ParseError, Any](ParseError.MissingSubcommand(${ Expr(expected) }))
+            else
+              Left[ParseError, Any](
+                ParseError.MissingSubcommand(${ Expr(expected) }, $contextHelp)
+              )
           }
