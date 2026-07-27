@@ -41,6 +41,10 @@ object Cli:
           "Commit the open generation (records the post-sync snapshot)",
           pure(Command.SyncCommit)
         ) | sub(
+          "amend",
+          "Amend the last completed generation (re-records its post-sync snapshot)",
+          pure(Command.SyncAmend)
+        ) | sub(
           "abort",
           "Abort the open generation",
           pure(Command.SyncAbort)

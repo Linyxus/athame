@@ -6,9 +6,9 @@ project's spec strings and the code under them saying the same thing.
 ## What it ships
 
 - **The `ame` MCP server.** `bin/ame.cjs` is athame bundled into a single dependency-free
-  CommonJS file, run with whatever `node` is on your PATH. It offers six tools —
-  `sync_begin`, `sync_commit`, `sync_abort`, `sync_list`, `sync_log`, `sync_diff` — which
-  record and inspect athame's numbered sync generations.
+  CommonJS file, run with whatever `node` is on your PATH. It offers seven tools —
+  `sync_begin`, `sync_commit`, `sync_amend`, `sync_abort`, `sync_list`, `sync_log`, `sync_diff` —
+  which record and inspect athame's numbered sync generations.
 - **`/sync`.** One command that surveys the `'''spec` strings in the repository,
   reconciles each spec with its implementation, verifies that the project still builds, and
   records the pass as a generation.

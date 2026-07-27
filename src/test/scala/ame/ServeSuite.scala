@@ -47,11 +47,11 @@ class ServeSuite extends munit.FunSuite:
     """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}"""
 
   /** The handshake in full: athame's identity, the one capability it declares, and the paragraph
-    * that tells a client how six tools fit together. Building a session reads nothing from disk, so
-    * a directory that does not exist is the honest fixture for "this decides nothing about git".
+    * that tells a client how seven tools fit together. Building a session reads nothing from disk,
+    * so a directory that does not exist is the honest fixture for "this decides nothing about git".
     */
   private val initializeReply =
-    """{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"athame","title":"athame","version":"0.0.1-SNAPSHOT"},"instructions":"athame records what a sync did to a repository, as a numbered series of generations. Begin a generation before the sync writes anything and commit it once the sync is done: begin snapshots the working tree as the sync found it, commit snapshots it as the sync left it, and only one generation may be open at a time. Abort discards an open generation without recording anything; the working tree is never touched by any of these. Use list and log to inspect the series, and diff to see what has changed since the last completed generation. Every tool acts on the one repository this server was started in and takes no arguments."}}"""
+    """{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"athame","title":"athame","version":"0.0.1-SNAPSHOT"},"instructions":"athame records what a sync did to a repository, as a numbered series of generations. Begin a generation before the sync writes anything and commit it once the sync is done: begin snapshots the working tree as the sync found it, commit snapshots it as the sync left it, and only one generation may be open at a time. Amend replaces the last completed generation's post-sync snapshot with the working tree as it stands now, for a sync that got something wrong and has since been corrected. Abort discards an open generation without recording anything; the working tree is never touched by any of these. Use list and log to inspect the series, and diff to see what has changed since the last completed generation. Every tool acts on the one repository this server was started in and takes no arguments."}}"""
 
   private def session() = Serve.build("/definitely/not/a/repository")(_ => ())
 

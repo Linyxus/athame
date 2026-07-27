@@ -65,6 +65,31 @@ object Sync:
       created  <- create(dir, postId(open.number))
     yield open.copy(post = Some(SnapshotRef(created.commit, created.tree)))
 
+  /** Re-records the last completed generation's post-snapshot from the working tree as it stands
+    * now, so that generation's story becomes "the sync ended here instead".
+    *
+    * This is `git commit --amend` for a generation, and it keeps that analogy's bargain: the
+    * snapshot being replaced is discarded rather than kept as a revision, and the ref moves in one
+    * step, so nothing ever observes the generation without a post. It exists for the sync that
+    * landed somewhere the user did not want — the corrective edits are made first, and this is what
+    * stops the record from claiming otherwise.
+    *
+    * An open generation is refused before anything else is considered: the answer there is to
+    * commit or abort it, and the generation below it is not the one the caller meant. With nothing
+    * ever completed there is nothing to re-record, which is [[SyncError.NoCompletedGeneration]].
+    * Nothing else refuses — amending twice, or amending a tree that already matches the recorded
+    * post, simply records again — and [[Generation.changed]] can flip in either direction, since it
+    * is derived from the trees rather than stored.
+    */
+  def amend(dir: String): Either[SyncError, Generation] =
+    for
+      slots   <- scan(dir)
+      _       <- slots.find(_.post.isEmpty).map(open => SyncError.GenerationOpen(open.number)).toLeft(())
+      last    <- slots.filter(_.post.isDefined).lastOption.toRight(SyncError.NoCompletedGeneration)
+      pre     <- snapshotRef(dir, last.pre)
+      created <- replace(dir, postId(last.number))
+    yield Generation(last.number, pre, Some(SnapshotRef(created.commit, created.tree)))
+
   /** Drops the open generation's pre-snapshot, leaving no trace of it, and returns its number —
     * which the next [[begin]] will hand out again.
     */
@@ -210,6 +235,13 @@ object Sync:
 
   private def create(dir: String, id: String): Either[SyncError, git.SnapshotCreated] =
     git.Snapshot.create(dir, id).left.map(SyncError.Git.apply)
+
+  /** Creating over an id that already exists, which is only ever [[amend]] moving a post. Every
+    * other caller goes through [[create]] and keeps the collision refusal that stops two
+    * generations from sharing a ref.
+    */
+  private def replace(dir: String, id: String): Either[SyncError, git.SnapshotCreated] =
+    git.Snapshot.create(dir, id, force = true).left.map(SyncError.Git.apply)
 
   /** Applies `f` across the list, stopping at the first failure so a broken repository does not
     * spawn a git process per remaining entry.

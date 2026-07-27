@@ -61,16 +61,21 @@ athame records each sync as a numbered **generation**: a pair of snapshots brack
 - `sync_begin` opens a generation and snapshots the working tree as the sync found it.
   `sync_commit` closes it, snapshots the tree as the sync left it, and reports whether anything
   changed. `sync_abort` discards the open generation and its snapshot, as if it had never begun.
+- `sync_amend` replaces the last completed generation's post-sync snapshot with the working tree
+  as it stands now, as if that sync had ended here. It is the one recording tool that targets a
+  **completed** generation rather than an open one, and it is for one narrow situation only: see
+  *Amending a previous sync* below.
 - At most one generation is open at a time. `sync_begin` fails while one is open, and
-  `sync_commit` and `sync_abort` fail when none is.
-- None of the three touches a file. Snapshots are commits under `refs/ame/` covering every
+  `sync_commit` and `sync_abort` fail when none is. `sync_amend` fails while one is open as well,
+  and when no generation has ever been completed.
+- None of the four touches a file. Snapshots are commits under `refs/ame/` covering every
   tracked file plus every untracked file `.gitignore` does not exclude; branches, the index,
   HEAD and the working tree are all left alone. In particular **`sync_abort` does not revert
   anything** — it drops the record and leaves the edits where they are.
-- The six tools are the `sync_*` tools on the `ame` MCP server: `sync_begin`, `sync_commit` and
-  `sync_abort` record, while `sync_list`, `sync_log` and `sync_diff` are read-only. None of them
-  takes arguments, and none takes a path: the server fixed its repository at startup — the one
-  this session is running in — and acts only there.
+- The seven tools are the `sync_*` tools on the `ame` MCP server: `sync_begin`, `sync_commit`,
+  `sync_amend` and `sync_abort` record, while `sync_list`, `sync_log` and `sync_diff` are
+  read-only. None of them takes arguments, and none takes a path: the server fixed its repository
+  at startup — the one this session is running in — and acts only there.
 - `sync_diff` shows what has changed since the **last completed** generation's post-sync
   snapshot. That drift is precisely what a sync has to reconcile. An open generation is never
   the baseline, because it has no recorded after-state; run mid-sync, the diff therefore shows
@@ -160,6 +165,43 @@ claim about where the sync landed, and a broken tree is not somewhere to land. I
 finish, either fix it or explain precisely what is blocking. When abandoning the attempt, call
 `sync_abort` and tell the user plainly that abort discards only the record: the partial edits
 are still in their working tree, and reverting them is theirs to do, not yours.
+
+## Amending a previous sync
+
+Use this **only** when the user says a completed sync got something wrong and asks you to change
+it. An amend is not a new sync and it is never a first resort: a repository that has drifted since
+the last generation wants an incremental sync, and a generation that is still open wants
+`sync_commit`. What amend is for is the narrower case where the sync is over, the user has read
+what it did, and what it did was not right. The corrective edits then belong to that generation
+rather than to a new one, and `sync_amend` is what says so — it moves the last completed
+generation's post-sync snapshot to the working tree as it stands now, and discards the snapshot it
+replaces. There is no history of a generation's earlier endings and no way back to one.
+
+The work itself is a sync's, minus the bracketing:
+
+- **Make the corrective edits the user asked for.** The reconciliation doctrine below governs them
+  exactly as it governs a sync's, and a focus argument still confines them.
+- **Verify before recording anything**, by the project's own build command, exactly as before a
+  `sync_commit`. **Never amend a non-compiling tree** — a generation is a claim about where the
+  sync landed, and that is as true of an amended one as of a fresh one.
+- **Then call `sync_amend`**, so the generation records where the sync actually ended rather than
+  where it first stopped. It answers `amended generation N (changed)`, or
+  `amended generation N (no changes)` when the tree now matches the state that generation began
+  from — which is what an amend that undid the whole sync looks like.
+
+It refuses in two situations, and neither is to be worked around. While a generation is open it
+answers `error: generation N is already open (commit or abort it first)`: the open generation is
+the one to finish, and the one below it is not what the user meant. When nothing has ever been
+completed it answers `error: no completed generation to amend`, which means this repository has no
+sync to correct — run one instead.
+
+Afterwards, `sync_diff` measures from the amended state: the snapshot just recorded is the baseline
+the next run reconciles against, exactly as any other post-sync snapshot would be.
+
+**Never amend on your own initiative.** An explicit request from the user is the only trigger for
+it. A generation whose result you have doubts about is something to raise with them, not something
+to quietly re-record. Both rules above hold here undiminished: no git mutation of any kind, and no
+contradiction settled on the user's behalf.
 
 ## Reconciliation doctrine
 

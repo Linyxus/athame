@@ -62,7 +62,7 @@ enum ServeMode:
   *   - `outputSchema` and `structuredContent`. The results are prose meant for a model to read.
   *   - Progress and log notifications from tools: [[Runner]] is synchronous and says nothing until
   *     it is done, so there is nothing to report while a call is in flight.
-  *   - Tool-list pagination and `notifications/tools/list_changed`: six tools, fixed for the life
+  *   - Tool-list pagination and `notifications/tools/list_changed`: seven tools, fixed for the life
   *     of the process.
   *   - Signal handling. There is no state to flush on the way out, so Node's default exit is the
   *     whole shutdown story.
@@ -76,13 +76,15 @@ object Serve:
   /** What a client is told the tools are for, in the `initialize` result.
     *
     * Addressed to whoever is driving the model: the generation model is the part that cannot be
-    * inferred from six tool descriptions read separately.
+    * inferred from seven tool descriptions read separately.
     */
   val Instructions: String =
     "athame records what a sync did to a repository, as a numbered series of generations. " +
       "Begin a generation before the sync writes anything and commit it once the sync is done: " +
       "begin snapshots the working tree as the sync found it, commit snapshots it as the sync " +
-      "left it, and only one generation may be open at a time. Abort discards an open generation " +
+      "left it, and only one generation may be open at a time. Amend replaces the last completed " +
+      "generation's post-sync snapshot with the working tree as it stands now, for a sync that got " +
+      "something wrong and has since been corrected. Abort discards an open generation " +
       "without recording anything; the working tree is never touched by any of these. Use list " +
       "and log to inspect the series, and diff to see what has changed since the last completed " +
       "generation. Every tool acts on the one repository this server was started in and takes no " +

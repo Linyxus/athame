@@ -26,6 +26,7 @@ object Runner:
       case Command.Version    => succeed(version)
       case Command.SyncBegin  => report(Sync.begin(dir).map(begun))
       case Command.SyncCommit => report(Sync.commit(dir).map(committed))
+      case Command.SyncAmend  => report(Sync.amend(dir).map(amended))
       case Command.SyncAbort  => report(Sync.abort(dir).map(number => s"aborted generation $number"))
       case Command.SyncList   => report(Sync.list(dir).map(renderList))
       case Command.SyncLog    => report(Sync.list(dir).flatMap(renderLog(dir, _)))
@@ -42,10 +43,18 @@ object Runner:
   private def begun(generation: Generation): String = s"begun generation ${generation.number}"
 
   private def committed(generation: Generation): String =
-    val summary = generation.changed match
+    s"committed generation ${generation.number} (${summary(generation)})"
+
+  /** Amend answers in commit's own shape, because it closes a generation the same way: the verb is
+    * the only thing that differs, and the reader wants the same two facts out of both.
+    */
+  private def amended(generation: Generation): String =
+    s"amended generation ${generation.number} (${summary(generation)})"
+
+  private def summary(generation: Generation): String =
+    generation.changed match
       case Some(true) => "changed"
       case _          => "no changes"
-    s"committed generation ${generation.number} ($summary)"
 
   private def renderList(generations: List[Generation]): String =
     if generations.isEmpty then "no generations"
@@ -120,6 +129,8 @@ object Runner:
         s"generation $generation is already open (commit or abort it first)"
       case SyncError.NoOpenGeneration =>
         "no open generation"
+      case SyncError.NoCompletedGeneration =>
+        "no completed generation to amend"
       case SyncError.CorruptState(details) =>
         s"corrupt sync state: $details"
       case SyncError.Git(git.GitError.NotARepository(dir)) =>

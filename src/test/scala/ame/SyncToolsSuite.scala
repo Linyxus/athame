@@ -115,6 +115,9 @@ class SyncToolsSuite extends munit.FunSuite:
   private val commitTool =
     """{"name":"sync_commit","title":"Commit sync generation","description":"Closes the open generation, recording a snapshot of the working tree as the sync left it, and reports whether anything changed. Fails if no generation is open.","inputSchema":{"type":"object"},"annotations":{"openWorldHint":false}}"""
 
+  private val amendTool =
+    """{"name":"sync_amend","title":"Amend sync generation","description":"Replaces the last completed generation's post-sync snapshot with the working tree as it stands now, as if that sync had ended here. This is for correcting a completed sync after the fact, once the corrective edits have been made. Fails while a generation is open, and when no generation has been completed yet.","inputSchema":{"type":"object"},"annotations":{"destructiveHint":true,"openWorldHint":false}}"""
+
   private val abortTool =
     """{"name":"sync_abort","title":"Abort sync generation","description":"Discards the open generation and the snapshot it recorded, as if it had never begun. The working tree is left exactly as it is; only the record goes.","inputSchema":{"type":"object"},"annotations":{"destructiveHint":true,"openWorldHint":false}}"""
 
@@ -128,7 +131,7 @@ class SyncToolsSuite extends munit.FunSuite:
     """{"name":"sync_diff","title":"Diff since last sync","description":"Shows what has changed in the working tree since the last completed generation's post-sync snapshot, as a git patch. That drift is what a reconciling engine has to resolve; an open generation is never the baseline, because it has no recorded after-state.","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":true,"openWorldHint":false}}"""
 
   private def toolsListReply(id: Int) =
-    s"""{"jsonrpc":"2.0","id":$id,"result":{"tools":[$beginTool,$commitTool,$abortTool,$listTool,$logTool,$diffTool]}}"""
+    s"""{"jsonrpc":"2.0","id":$id,"result":{"tools":[$beginTool,$commitTool,$amendTool,$abortTool,$listTool,$logTool,$diffTool]}}"""
 
   test("tools/list: the whole reply, byte for byte — this is what a model reads"):
     withClient: (_, client) =>
@@ -151,6 +154,30 @@ class SyncToolsSuite extends munit.FunSuite:
       assertEquals(client.call("sync_begin"), success(3, "begun generation 2"))
       repo.write("a.txt", "edited by the sync")
       assertEquals(client.call("sync_commit"), success(4, "committed generation 2 (changed)"))
+
+  test("scenario: amend re-records the generation the last sync closed"):
+    withClient: (repo, client) =>
+      assertEquals(client.call("sync_begin"), success(1, "begun generation 1"))
+      assertEquals(client.call("sync_commit"), success(2, "committed generation 1 (no changes)"))
+      repo.write("a.txt", "corrected after the fact")
+      assertEquals(client.call("sync_amend"), success(3, "amended generation 1 (changed)"))
+      assertEquals(client.call("sync_list"), success(4, "#1  committed  changed"))
+
+  test("scenario: an amended generation is the baseline the next diff measures from"):
+    withClient: (repo, client) =>
+      client.call("sync_begin")
+      repo.write("a.txt", "the sync's work")
+      client.call("sync_commit")
+      repo.write("a.txt", "corrected after the fact")
+      client.call("sync_amend")
+      assertEquals(client.call("sync_diff"), success(4, "no changes since generation 1"))
+      repo.write("a.txt", "a later human edit")
+      val patch = resultOf(client.call("sync_diff")).content.head match
+        case block: mcp.TextContent => block.text
+        case other                  => fail(s"expected a text block, got $other")
+      assert(patch.contains("-corrected after the fact"), clue(patch))
+      assert(patch.contains("+a later human edit"), clue(patch))
+      assert(!patch.contains("the sync's work"), clue(patch))
 
   test("scenario: abort takes the open generation away again"):
     withClient: (_, client) =>
@@ -235,6 +262,22 @@ class SyncToolsSuite extends munit.FunSuite:
   test("errors: committing with nothing open"):
     withClient: (_, client) =>
       assertEquals(client.call("sync_commit"), failure(1, "error: no open generation"))
+
+  test("errors: amending with nothing ever completed"):
+    withClient: (repo, client) =>
+      val cli = Runner.execute(Command.SyncAmend, repo.dir)
+      assertEquals(cli.err, "error: no completed generation to amend\n")
+      assertEquals(client.call("sync_amend"), failure(1, cli.err.stripSuffix("\n")))
+
+  test("errors: amending while a generation is open"):
+    withClient: (_, client) =>
+      client.call("sync_begin")
+      client.call("sync_commit")
+      client.call("sync_begin")
+      assertEquals(
+        client.call("sync_amend"),
+        failure(4, "error: generation 2 is already open (commit or abort it first)")
+      )
 
   test("errors: aborting with nothing open"):
     withClient: (_, client) =>

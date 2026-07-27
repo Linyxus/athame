@@ -135,6 +135,136 @@ class SyncSuite extends munit.FunSuite:
       assertEquals(Sync.commit(repo.dir), Left(SyncError.NoOpenGeneration))
 
   // -------------------------------------------------------------------------------------------
+  // amend
+  // -------------------------------------------------------------------------------------------
+
+  test("amend: the post ref moves to the working tree as it stands now"):
+    withRepo: repo =>
+      seed(repo)
+      ok(Sync.begin(repo.dir))
+      val committed = ok(Sync.commit(repo.dir))
+      repo.write("a.txt", "corrected")
+      val amended = ok(Sync.amend(repo.dir))
+      assertEquals(amended.number, 1)
+      assertEquals(amended.pre, committed.pre)
+      assertNotEquals(amended.post.get.commit, committed.post.get.commit)
+      assertEquals(git.Snapshot.resolve(repo.dir, "sync/1/post"), Right(amended.post.get.commit))
+      assertEquals(repo.show(amended.post.get.commit, "a.txt"), "corrected")
+      assertEquals(snapshotIds(repo), List("sync/1/post", "sync/1/pre"))
+
+  test("amend: the snapshot it replaced is discarded, not kept beside the new one"):
+    withRepo: repo =>
+      seed(repo)
+      ok(Sync.begin(repo.dir))
+      val committed = ok(Sync.commit(repo.dir))
+      repo.write("a.txt", "corrected")
+      val amended = ok(Sync.amend(repo.dir))
+      val reachable = repo.git("rev-list", "--all").linesIterator.toSet
+      assert(reachable.contains(amended.post.get.commit), clue(reachable))
+      assert(!reachable.contains(committed.post.get.commit), clue(reachable))
+
+  test("amend: the target is the last completed generation, and no other ref moves"):
+    withRepo: repo =>
+      seed(repo)
+      ok(Sync.begin(repo.dir))
+      repo.write("a.txt", "first sync")
+      val first = ok(Sync.commit(repo.dir))
+      ok(Sync.begin(repo.dir))
+      repo.write("a.txt", "second sync")
+      val second = ok(Sync.commit(repo.dir))
+      repo.write("a.txt", "corrected")
+      val amended = ok(Sync.amend(repo.dir))
+      assertEquals(amended.number, 2)
+      assertEquals(amended.pre, second.pre)
+      assertEquals(git.Snapshot.resolve(repo.dir, "sync/1/pre"), Right(first.pre.commit))
+      assertEquals(git.Snapshot.resolve(repo.dir, "sync/1/post"), Right(first.post.get.commit))
+      assertEquals(git.Snapshot.resolve(repo.dir, "sync/2/pre"), Right(second.pre.commit))
+      assertEquals(git.Snapshot.resolve(repo.dir, "sync/2/post"), Right(amended.post.get.commit))
+
+  test("amend: a no-op generation becomes a changed one"):
+    withRepo: repo =>
+      seed(repo)
+      ok(Sync.begin(repo.dir))
+      assertEquals(ok(Sync.commit(repo.dir)).changed, Some(false))
+      repo.write("a.txt", "corrected")
+      assertEquals(ok(Sync.amend(repo.dir)).changed, Some(true))
+
+  test("amend: a changed generation becomes a no-op when the tree is put back"):
+    withRepo: repo =>
+      seed(repo)
+      ok(Sync.begin(repo.dir))
+      repo.write("a.txt", "edited by the sync")
+      assertEquals(ok(Sync.commit(repo.dir)).changed, Some(true))
+      repo.write("a.txt", "hello")
+      assertEquals(ok(Sync.amend(repo.dir)).changed, Some(false))
+
+  test("amend: amending again re-records again, and a pointless amend is not refused"):
+    withRepo: repo =>
+      seed(repo)
+      ok(Sync.begin(repo.dir))
+      ok(Sync.commit(repo.dir))
+      repo.write("a.txt", "first correction")
+      val once = ok(Sync.amend(repo.dir))
+      repo.write("a.txt", "second correction")
+      val twice = ok(Sync.amend(repo.dir))
+      assertNotEquals(twice.post.get.commit, once.post.get.commit)
+      assertEquals(repo.show(twice.post.get.commit, "a.txt"), "second correction")
+      // The tree already matches what was just recorded, and that is still an amend.
+      val again = ok(Sync.amend(repo.dir))
+      assertEquals(again.post.get.tree, twice.post.get.tree)
+      assertEquals(snapshotIds(repo), List("sync/1/post", "sync/1/pre"))
+
+  test("amend: an open generation is refused, and the completed one below it does not move"):
+    withRepo: repo =>
+      seed(repo)
+      ok(Sync.begin(repo.dir))
+      val committed = ok(Sync.commit(repo.dir))
+      ok(Sync.begin(repo.dir))
+      repo.write("a.txt", "work in progress")
+      assertEquals(Sync.amend(repo.dir), Left(SyncError.GenerationOpen(2)))
+      assertEquals(git.Snapshot.resolve(repo.dir, "sync/1/post"), Right(committed.post.get.commit))
+
+  test("amend: an open generation is refused even when there is nothing completed to amend"):
+    withRepo: repo =>
+      seed(repo)
+      ok(Sync.begin(repo.dir))
+      assertEquals(Sync.amend(repo.dir), Left(SyncError.GenerationOpen(1)))
+
+  test("amend: with nothing ever completed there is nothing to re-record"):
+    withRepo: repo =>
+      seed(repo)
+      assertEquals(Sync.amend(repo.dir), Left(SyncError.NoCompletedGeneration))
+      assertEquals(snapshotIds(repo), Nil)
+
+  test("amend: an aborted generation leaves nothing to amend either"):
+    withRepo: repo =>
+      seed(repo)
+      ok(Sync.begin(repo.dir))
+      ok(Sync.abort(repo.dir))
+      assertEquals(Sync.amend(repo.dir), Left(SyncError.NoCompletedGeneration))
+
+  test("amend: list, current and lastCompleted all read the amended generation"):
+    withRepo: repo =>
+      seed(repo)
+      ok(Sync.begin(repo.dir))
+      ok(Sync.commit(repo.dir))
+      repo.write("a.txt", "corrected")
+      val amended = ok(Sync.amend(repo.dir))
+      assertEquals(Sync.list(repo.dir), Right(List(amended)))
+      assertEquals(Sync.current(repo.dir), Right(None))
+      // The baseline a diff measures from: it is the amended state, not the one replaced.
+      assertEquals(Sync.lastCompleted(repo.dir), Right(Some(amended)))
+
+  test("amend: the next generation is numbered as if nothing had happened"):
+    withRepo: repo =>
+      seed(repo)
+      ok(Sync.begin(repo.dir))
+      ok(Sync.commit(repo.dir))
+      repo.write("a.txt", "corrected")
+      ok(Sync.amend(repo.dir))
+      assertEquals(ok(Sync.begin(repo.dir)).number, 2)
+
+  // -------------------------------------------------------------------------------------------
   // A full cycle (G1, G3)
   // -------------------------------------------------------------------------------------------
 
@@ -345,12 +475,13 @@ class SyncSuite extends munit.FunSuite:
       assertCorrupt(Sync.begin(repo.dir), "7")
       assertEquals(snapshotIds(repo), List("sync/7/post"), "begin must not write over a broken state")
 
-  test("corrupt: a post with no pre is reported by current, commit and abort"):
+  test("corrupt: a post with no pre is reported by current, commit, amend and abort"):
     withRepo: repo =>
       seed(repo)
       plant(repo, "sync/7/post")
       assertCorrupt(Sync.current(repo.dir), "7")
       assertCorrupt(Sync.commit(repo.dir), "7")
+      assertCorrupt(Sync.amend(repo.dir), "7")
       assertCorrupt(Sync.abort(repo.dir), "7")
 
   test("corrupt: two generations open at once are reported by commit"):
@@ -360,7 +491,7 @@ class SyncSuite extends munit.FunSuite:
       plant(repo, "sync/2/pre")
       assertCorrupt(Sync.commit(repo.dir), "1", "2")
 
-  test("corrupt: two generations open at once are reported by list, current, begin and abort"):
+  test("corrupt: two generations open at once are reported by list, current, begin, amend and abort"):
     withRepo: repo =>
       seed(repo)
       plant(repo, "sync/1/pre")
@@ -368,6 +499,7 @@ class SyncSuite extends munit.FunSuite:
       assertCorrupt(Sync.list(repo.dir), "1", "2")
       assertCorrupt(Sync.current(repo.dir), "1", "2")
       assertCorrupt(Sync.begin(repo.dir), "1", "2")
+      assertCorrupt(Sync.amend(repo.dir), "1", "2")
       assertCorrupt(Sync.abort(repo.dir), "1", "2")
 
   test("corrupt: a healthy open generation next to a committed one is not corrupt"):
@@ -413,6 +545,24 @@ class SyncSuite extends munit.FunSuite:
       ok(Sync.commit(repo.dir))
       assertEquals(git.Snapshot.resolve(repo.dir, "manual/backup"), Right(backup))
 
+  /** Amend is the one operation that writes over a ref that already exists, so the ids it must not
+    * mistake for the post it is moving are worth naming individually.
+    */
+  test("foreign: an amend moves the post and nothing that merely looks like one"):
+    withRepo: repo =>
+      seed(repo)
+      val backup = plant(repo, "manual/backup")
+      val padded = plant(repo, "sync/01/post")
+      val stray = plant(repo, "sync/1/postscript")
+      ok(Sync.begin(repo.dir))
+      val committed = ok(Sync.commit(repo.dir))
+      repo.write("a.txt", "corrected")
+      val amended = ok(Sync.amend(repo.dir))
+      assertNotEquals(amended.post.get.commit, committed.post.get.commit)
+      assertEquals(git.Snapshot.resolve(repo.dir, "manual/backup"), Right(backup))
+      assertEquals(git.Snapshot.resolve(repo.dir, "sync/01/post"), Right(padded))
+      assertEquals(git.Snapshot.resolve(repo.dir, "sync/1/postscript"), Right(stray))
+
   // -------------------------------------------------------------------------------------------
   // Inherited guarantees (G9) and location
   // -------------------------------------------------------------------------------------------
@@ -446,11 +596,31 @@ class SyncSuite extends munit.FunSuite:
       assertEquals(repo.git("diff", "--cached"), staged)
       assertEquals(repo.head, head)
 
+  test("sanity: an amend leaves the repository byte-identical too"):
+    withRepo: repo =>
+      seed(repo)
+      ok(Sync.begin(repo.dir))
+      ok(Sync.commit(repo.dir))
+      repo.write("staged.txt", "staged")
+      repo.git("add", "staged.txt")
+      repo.write("a.txt", "unstaged edit")
+      repo.write("untracked.txt", "loose")
+      val status = repo.status
+      val staged = repo.git("diff", "--cached")
+      val head = repo.head
+
+      ok(Sync.amend(repo.dir))
+
+      assertEquals(repo.status, status)
+      assertEquals(repo.git("diff", "--cached"), staged)
+      assertEquals(repo.head, head)
+
   test("location: every entry point reports a directory outside a repository"):
     TempDir.plain: dir =>
       val expected = SyncError.Git(git.GitError.NotARepository(dir))
       assertEquals(Sync.begin(dir), Left(expected))
       assertEquals(Sync.commit(dir), Left(expected))
+      assertEquals(Sync.amend(dir), Left(expected))
       assertEquals(Sync.abort(dir), Left(expected))
       assertEquals(Sync.list(dir), Left(expected))
       assertEquals(Sync.current(dir), Left(expected))
@@ -467,3 +637,16 @@ class SyncSuite extends munit.FunSuite:
       assertEquals(committed.changed, Some(true))
       assertEquals(repo.show(committed.post.get.commit, "root.txt"), "root")
       assertEquals(ok(Sync.list(repo.dir)).map(_.number), List(1))
+
+  test("location: an amend can be driven from a subdirectory too"):
+    withRepo: repo =>
+      seed(repo)
+      repo.write("sub/deep/c.txt", "deep")
+      val nested = repo.path("sub/deep")
+      ok(Sync.begin(nested))
+      ok(Sync.commit(nested))
+      repo.write("root.txt", "root")
+      val amended = ok(Sync.amend(nested))
+      assertEquals(amended.number, 1)
+      assertEquals(amended.changed, Some(true))
+      assertEquals(repo.show(amended.post.get.commit, "root.txt"), "root")

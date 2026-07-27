@@ -17,7 +17,7 @@ class CliSuite extends munit.FunSuite:
 
   private val rootCommands = List("version", "sync", "serve")
 
-  private val syncSubcommands = List("begin", "commit", "abort", "list", "log", "diff")
+  private val syncSubcommands = List("begin", "commit", "amend", "abort", "list", "log", "diff")
 
   private def help(result: Either[ParseError, Command | ServeConfig])(using munit.Location): String =
     result match
@@ -36,6 +36,9 @@ class CliSuite extends munit.FunSuite:
 
   test("commands: sync commit"):
     assertEquals(parse("sync", "commit"), Right(Command.SyncCommit))
+
+  test("commands: sync amend"):
+    assertEquals(parse("sync", "amend"), Right(Command.SyncAmend))
 
   test("commands: sync abort"):
     assertEquals(parse("sync", "abort"), Right(Command.SyncAbort))
@@ -82,7 +85,7 @@ class CliSuite extends munit.FunSuite:
   // -------------------------------------------------------------------------------------------
 
   /** The motivating bug (A10.1): `ame sync` used to answer with the root help, which lists `version`
-    * and `sync` — everything except the six commands the user was actually being asked for. Each of
+    * and `sync` — everything except the seven commands the user was actually being asked for. Each of
     * these pins the carried help against the `--help` text of the scope that raised the error, which
     * is the property that makes the answer useful.
     */
@@ -92,7 +95,7 @@ class CliSuite extends munit.FunSuite:
       Left(ParseError.MissingSubcommand(rootCommands, help(parse("--help"))))
     )
 
-  test("subcommands: bare sync asks for one of its six, and shows sync's help"):
+  test("subcommands: bare sync asks for one of its seven, and shows sync's help"):
     assertEquals(
       parse("sync"),
       Left(ParseError.MissingSubcommand(syncSubcommands, help(parse("sync", "--help"))))
@@ -135,10 +138,14 @@ class CliSuite extends munit.FunSuite:
     assert(text.contains("Manage sync generations"), clue(text))
     assert(text.contains("Serve athame's tools over MCP (stdio by default)"), clue(text))
 
-  test("help: the sync scope lists all five subcommands"):
+  test("help: the sync scope lists all seven subcommands"):
     val text = help(parse("sync", "--help"))
     syncSubcommands.foreach(name => assert(text.contains(name), clue(text)))
     assert(text.contains("Begin a new generation (records the pre-sync snapshot)"), clue(text))
+    assert(
+      text.contains("Amend the last completed generation (re-records its post-sync snapshot)"),
+      clue(text)
+    )
     assert(text.contains("Show generation details, newest first"), clue(text))
     assert(text.contains("Show changes since the last completed generation"), clue(text))
 

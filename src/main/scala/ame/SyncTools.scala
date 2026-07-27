@@ -56,7 +56,9 @@ object SyncTools:
   /** Closed-world and recording: these write a snapshot into the repository's own ref namespace. */
   private val records: ToolAnnotations = ToolAnnotations(None, None, None, None, Some(false))
 
-  /** Closed-world and destructive: the open generation is gone, and it cannot be recovered. */
+  /** Closed-world and destructive: what these drop — an open generation, or a snapshot already
+    * recorded — is gone, and it cannot be recovered.
+    */
   private val discards: ToolAnnotations = ToolAnnotations(None, None, Some(true), None, Some(false))
 
   private def tool(name: String, title: String, description: String, hints: ToolAnnotations): Tool =
@@ -72,7 +74,7 @@ object SyncTools:
       meta = None
     )
 
-  /** The six, in the order `tools/list` reports them, each with the command it runs. */
+  /** The seven, in the order `tools/list` reports them, each with the command it runs. */
   private val registry: Vector[(Tool, Command)] = Vector(
     tool(
       "sync_begin",
@@ -89,6 +91,15 @@ object SyncTools:
         "and reports whether anything changed. Fails if no generation is open.",
       records
     ) -> Command.SyncCommit,
+    tool(
+      "sync_amend",
+      "Amend sync generation",
+      "Replaces the last completed generation's post-sync snapshot with the working tree as it " +
+        "stands now, as if that sync had ended here. This is for correcting a completed sync after " +
+        "the fact, once the corrective edits have been made. Fails while a generation is open, and " +
+        "when no generation has been completed yet.",
+      discards
+    ) -> Command.SyncAmend,
     tool(
       "sync_abort",
       "Abort sync generation",

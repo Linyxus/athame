@@ -105,6 +105,59 @@ class RunnerSuite extends munit.FunSuite:
       assertEquals(run(repo, Command.SyncCommit), Outcome("", "error: no open generation\n", 1))
 
   // -------------------------------------------------------------------------------------------
+  // amend
+  // -------------------------------------------------------------------------------------------
+
+  test("amend: a corrected working tree is re-recorded as changed"):
+    withRepo: repo =>
+      seed(repo)
+      run(repo, Command.SyncBegin)
+      run(repo, Command.SyncCommit)
+      repo.write("a.txt", "corrected")
+      assertEquals(run(repo, Command.SyncAmend), Outcome("amended generation 1 (changed)\n", "", 0))
+
+  test("amend: a generation put back to where it began is re-recorded as no changes"):
+    withRepo: repo =>
+      seed(repo)
+      run(repo, Command.SyncBegin)
+      repo.write("a.txt", "edited by the sync")
+      assertEquals(run(repo, Command.SyncCommit), Outcome("committed generation 1 (changed)\n", "", 0))
+      repo.write("a.txt", "hello")
+      assertEquals(run(repo, Command.SyncAmend), Outcome("amended generation 1 (no changes)\n", "", 0))
+
+  test("amend: with nothing ever completed says so"):
+    withRepo: repo =>
+      seed(repo)
+      assertEquals(
+        run(repo, Command.SyncAmend),
+        Outcome("", "error: no completed generation to amend\n", 1)
+      )
+
+  test("amend: an open generation is what it complains about, not the completed one below it"):
+    withRepo: repo =>
+      seed(repo)
+      run(repo, Command.SyncBegin)
+      run(repo, Command.SyncCommit)
+      run(repo, Command.SyncBegin)
+      assertEquals(
+        run(repo, Command.SyncAmend),
+        Outcome("", "error: generation 2 is already open (commit or abort it first)\n", 1)
+      )
+
+  test("amend: the log reports the generation as committed, with its new post snapshot"):
+    withRepo: repo =>
+      seed(repo)
+      run(repo, Command.SyncBegin)
+      run(repo, Command.SyncCommit)
+      repo.write("a.txt", "corrected")
+      run(repo, Command.SyncAmend)
+      val (postCommit, postTree) = snapshotOf(repo, "sync/1/post")
+      assertEquals(run(repo, Command.SyncList), Outcome("#1  committed  changed\n", "", 0))
+      val lines = run(repo, Command.SyncLog).out.linesIterator.toList
+      assertEquals(lines(0), "generation 1 (committed, changed)")
+      assertEquals(lines(3), s"  post: $postCommit tree $postTree")
+
+  // -------------------------------------------------------------------------------------------
   // abort
   // -------------------------------------------------------------------------------------------
 
@@ -330,6 +383,22 @@ class RunnerSuite extends munit.FunSuite:
       committedGeneration(repo, "second sync")
       assertEquals(run(repo, Command.SyncDiff), Outcome("no changes since generation 2\n", "", 0))
 
+  test("diff: an amend moves the baseline to where the generation now ends"):
+    withRepo: repo =>
+      seed(repo)
+      committedGeneration(repo, "first sync")
+      repo.write("a.txt", "corrected")
+      assertEquals(run(repo, Command.SyncAmend), Outcome("amended generation 1 (changed)\n", "", 0))
+      assertEquals(run(repo, Command.SyncDiff), Outcome("no changes since generation 1\n", "", 0))
+      repo.write("a.txt", "human edit")
+      val outcome = run(repo, Command.SyncDiff)
+      assertEquals(outcome.err, "")
+      assertEquals(outcome.exit, 0)
+      assert(outcome.out.contains("-corrected"), clue(outcome.out))
+      assert(outcome.out.contains("+human edit"), clue(outcome.out))
+      // The replaced snapshot's content would appear as the removed side if it were still baseline.
+      assert(!outcome.out.contains("first sync"), clue(outcome.out))
+
   test("diff: corruption is reported rather than diffed"):
     withRepo: repo =>
       seed(repo)
@@ -351,6 +420,7 @@ class RunnerSuite extends munit.FunSuite:
       val expected = Outcome("", s"error: not a git repository: $dir\n", 1)
       assertEquals(Runner.execute(Command.SyncBegin, dir), expected)
       assertEquals(Runner.execute(Command.SyncCommit, dir), expected)
+      assertEquals(Runner.execute(Command.SyncAmend, dir), expected)
       assertEquals(Runner.execute(Command.SyncAbort, dir), expected)
       assertEquals(Runner.execute(Command.SyncList, dir), expected)
       assertEquals(Runner.execute(Command.SyncLog, dir), expected)
@@ -404,6 +474,7 @@ class RunnerSuite extends munit.FunSuite:
         run(repo, Command.SyncLog),
         run(repo, Command.SyncBegin),
         run(repo, Command.SyncCommit),
+        run(repo, Command.SyncAmend),
         run(repo, Command.SyncLog),
         run(repo, Command.SyncDiff),
         Runner.execute(Command.Version, repo.dir)
@@ -419,6 +490,7 @@ class RunnerSuite extends munit.FunSuite:
       seed(repo)
       val failures = List(
         run(repo, Command.SyncCommit),
+        run(repo, Command.SyncAmend),
         run(repo, Command.SyncAbort),
         run(repo, Command.SyncDiff),
         Runner.execute(Command.SyncList, "/definitely/not/a/repository")
