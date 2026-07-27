@@ -2,7 +2,9 @@ import scala.sys.process.Process
 
 ThisBuild / scalaVersion := "3.8.4"
 
+lazy val packageBundle = taskKey[File]("Bundle the Scala.js output into one CommonJS file at target/sea/bundle.cjs")
 lazy val packageBinary = taskKey[File]("Package the application as a Node.js Single Executable Application in dist/ame")
+lazy val packagePlugin = taskKey[File]("Refresh the magic plugin's committed bundle at plugin/bin/ame.cjs")
 
 def runCommand(cmd: Seq[String], cwd: File, log: sbt.Logger): Unit = {
   log.info(cmd.mkString(" "))
@@ -18,7 +20,9 @@ lazy val root = project
     scalaJSUseMainModuleInitializer := true,
     scalaJSLinkerConfig ~= { _.withModuleKind(ModuleKind.ESModule) },
     libraryDependencies += "org.scalameta" %%% "munit" % "1.1.1" % Test,
-    packageBinary := {
+    // The one bundling step, shared: the SEA binary and the plugin ship the same bytes, so a
+    // behavior change reaches both or neither.
+    packageBundle := {
       val log = streams.value.log
       val report = (Compile / fullLinkJS).value.data
       val linkerOutput = (Compile / fullLinkJS / scalaJSLinkerOutputDirectory).value
@@ -27,9 +31,6 @@ lazy val root = project
 
       val workDir = target.value / "sea"
       IO.createDirectory(workDir)
-      val distDir = baseDirectory.value / "dist"
-      IO.createDirectory(distDir)
-      val binary = distDir / "ame"
 
       // SEA main scripts must be CommonJS; bundle the ESM linker output into one CJS file.
       val bundle = workDir / "bundle.cjs"
@@ -41,6 +42,15 @@ lazy val root = project
         ),
         workDir, log
       )
+      bundle
+    },
+    packageBinary := {
+      val log = streams.value.log
+      val bundle = packageBundle.value
+      val workDir = bundle.getParentFile
+      val distDir = baseDirectory.value / "dist"
+      IO.createDirectory(distDir)
+      val binary = distDir / "ame"
 
       IO.write(
         workDir / "sea-config.json",
@@ -72,5 +82,16 @@ lazy val root = project
 
       log.info(s"SEA binary written to $binary")
       binary
+    },
+    // The plugin runs the bundle under whatever `node` is on the user's PATH, so it needs the
+    // CommonJS file itself rather than the SEA binary, which is built for this machine only.
+    packagePlugin := {
+      val log = streams.value.log
+      val bundle = packageBundle.value
+      val shipped = baseDirectory.value / "plugin" / "bin" / "ame.cjs"
+      IO.createDirectory(shipped.getParentFile)
+      IO.copyFile(bundle, shipped)
+      log.info(s"plugin bundle written to $shipped")
+      shipped
     },
   )

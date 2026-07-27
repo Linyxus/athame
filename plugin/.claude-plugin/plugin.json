@@ -1,0 +1,13 @@
+{
+  "name": "magic",
+  "displayName": "Magic",
+  "version": "0.1.0",
+  "description": "Spec-string sync for Scala. Ships athame as an MCP server and one command, /sync, that reconciles each '''spec block with the code below it and records the pass as a numbered generation.",
+  "author": {
+    "name": "Yichen Xu",
+    "url": "https://github.com/Linyxus"
+  },
+  "repository": "https://github.com/Linyxus/athame",
+  "license": "MIT",
+  "keywords": ["scala", "spec-strings", "mcp", "sync"]
+}
