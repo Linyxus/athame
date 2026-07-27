@@ -1,5 +1,38 @@
 # athame
 
+Athame is a prototype CLI tool for working with Scala's [magic spec strings](https://nightly.scala-lang.org/docs/reference/experimental/spec-strings.html).
+
+## Tutorial
+
+First, clone the template repository:
+
+``` sh
+git clone https://github.com/Linyxus/magic-testrepo1.git
+```
+
+Explore it a bit. It is a small Scala.js project whose functions carry spec strings.
+
+Then start Claude Code in the cloned repository and install the plugin:
+
+```
+/plugin marketplace add Linyxus/athame
+/plugin install magic@athame
+```
+
+Run `/reload-plugins` (or start a fresh session) so the command and the MCP server are
+loaded. Then, when you are ready:
+
+```
+/magic:sync
+```
+
+This is your first sync. It surveys every spec string in the repository, implements the
+`???` bodies, asks you about the contradiction rather than guessing, checks that the
+project still compiles, and records the whole pass as generation 1.
+
+Then enjoy! Tweak the spec strings, or the implementations, or both, and run
+`/magic:sync` again: whatever drifted since the last generation gets reconciled, and you watch the **magic** happen.
+
 ## Building
 
 ```
@@ -9,27 +42,6 @@ sbt packageBinary  # Node SEA binary at dist/ame
 
 `packageBinary` bundles the Scala.js output with esbuild and injects it into a copy of
 the local `node` executable, so `dist/ame` runs standalone.
-
-## The magic plugin
-
-This repository is also a Claude Code plugin marketplace, offering one plugin:
-
-```
-/plugin marketplace add Linyxus/athame
-/plugin install magic@athame
-```
-
-`magic` ships athame as an MCP server — `plugin/bin/ame.cjs`, run with `node` — and one
-command, `/sync`. That command surveys the `'''spec` strings in whichever repository
-Claude Code is running in and reconciles each spec with the code below it: implementing
-`???` bodies, rewriting code where the spec moved, rewriting prose where the code moved,
-and asking the user rather than guessing when the two contradict each other. It then
-verifies that the project still builds and records the whole pass as a numbered athame
-generation. It never runs a git mutation.
-
-`plugin/bin/ame.cjs` is a committed build artifact; refresh it with `sbt packagePlugin`
-whenever athame's behavior changes. That task and `packageBinary` share one esbuild
-bundling step, so the plugin ships exactly what `dist/ame` runs.
 
 ## License
 
